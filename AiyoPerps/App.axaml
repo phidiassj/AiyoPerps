@@ -1,0 +1,76 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="AiyoPerps.App"
+             RequestedThemeVariant="Dark">
+
+    <Application.Styles>
+        <FluentTheme />
+        <Style Selector="Window">
+            <Setter Property="Background">
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                    <GradientStop Offset="0" Color="#07141D" />
+                    <GradientStop Offset="1" Color="#0D1B24" />
+                </LinearGradientBrush>
+            </Setter>
+            <Setter Property="Foreground" Value="#CFE2E8" />
+            <Setter Property="FontFamily" Value="Inter, Segoe UI, Arial" />
+        </Style>
+
+        <Style Selector="Border.card">
+            <Setter Property="Background" Value="#10232D" />
+            <Setter Property="BorderBrush" Value="#26414C" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="12" />
+        </Style>
+
+        <Style Selector="TextBlock.label">
+            <Setter Property="Foreground" Value="#8FB1BE" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style Selector="Button">
+            <Setter Property="Background" Value="#173242" />
+            <Setter Property="BorderBrush" Value="#2B4D5E" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="#D5EAEE" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="12,7" />
+        </Style>
+
+        <Style Selector="Button.cta">
+            <Setter Property="Background" Value="#3CC6BE" />
+            <Setter Property="Foreground" Value="#062128" />
+            <Setter Property="BorderBrush" Value="#4BD5CE" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
+
+        <Style Selector="Button.ghost">
+            <Setter Property="Background" Value="#0E212C" />
+            <Setter Property="BorderBrush" Value="#29404C" />
+        </Style>
+
+        <Style Selector="TextBox, ComboBox">
+            <Setter Property="Background" Value="#0A1B25" />
+            <Setter Property="BorderBrush" Value="#2A4A58" />
+            <Setter Property="Foreground" Value="#D6EDF3" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="10,7" />
+        </Style>
+
+        <Style Selector="TabControl">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+
+        <Style Selector="TabItem">
+            <Setter Property="Foreground" Value="#9CBAC5" />
+            <Setter Property="Padding" Value="10,8" />
+        </Style>
+
+        <Style Selector="TabItem:selected">
+            <Setter Property="Foreground" Value="#E2F7FB" />
+        </Style>
+    </Application.Styles>
+</Application>
