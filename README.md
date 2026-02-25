@@ -3,7 +3,7 @@
 [中文版本說明](./Readme_zh.md) <br>
 AiyoPerps is a cryptocurrency perpetual futures trading application that supports leveraged trading on both DEXs (decentralized exchanges) and CEXs (centralized exchanges).<br>
 Features include multi-tab market K-line charts (candlestick charts), real-time limit and market order placement for multiple trading pairs, and position/order/balance viewing and management.<br>
-This software also provides a complete set of [REST API and MCP Server](./API_zh.md) capabilities,<br>
+This software also provides a complete set of [REST API and MCP Server](./API.md) capabilities,<br>
 meaning you can use any AI agents you like for automated operations or collaborative workflows, including [OpenClaw](https://molt.bot), [Codex](https://developers.openai.com/codex/cli), [Gemini-CLI](https://github.com/google-gemini/gemini-cli), [Claude Code](https://claude.com/product/claude-code), and more.<br>
 The user interface currently supports Traditional Chinese and English, with instant in-app switching; additional languages will be added over time.<br>
 <br>
