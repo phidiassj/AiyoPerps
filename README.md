@@ -12,7 +12,7 @@ The user interface currently supports Traditional Chinese and English, with inst
 ## 1. Requirements
 - Windows or Linux.
 - .NET 10 Runtime (included in the pre-release build).
-- Currently supported exchanges: Hyperliquid (DEX) and BitMEX (CEX). More will be added in the future.
+- Currently supported exchanges: [Hyperliquid](https://app.hyperliquid.xyz/) (DEX) and [BitMEX](https://www.bitmex.com/) (CEX). More will be added in the future.
 
 ## 2. Start The App
 1. On Windows, run `AiyoPerps.exe`; on Linux, run `./AiyoPerps`.

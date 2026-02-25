@@ -12,7 +12,7 @@ AiyoPerps 是一套加密貨幣永續合約操作軟體，同時支援 DEX (去�
 ## 1. 環境需求
 - Windows 或 Linux 。
 - .NET 10 Runtime（Pre-Release 版本已自帶）。
-- 目前交易所支援 DEX Hyperliquid 及 CEX BitMEX，未來將陸續增加。
+- 目前交易所支援 DEX [Hyperliquid](https://app.hyperliquid.xyz/) 及 CEX [BitMEX](https://www.bitmex.com/)，未來將陸續增加。
 
 ## 2. 啟動軟體
 1. Windows 執行 `AiyoPerps.exe`，Linux 執行 `./AiyoPerps`。
