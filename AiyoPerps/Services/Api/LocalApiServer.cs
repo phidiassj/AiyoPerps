@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System;
 using System.Collections.Generic;
@@ -60,6 +61,7 @@ public sealed class LocalApiServer : IAsyncDisposable
                 ApplicationName = typeof(LocalApiServer).Assembly.FullName,
                 ContentRootPath = AppContext.BaseDirectory
             });
+            builder.Services.AddOpenApi();
 
             builder.WebHost.UseKestrel();
             builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
@@ -132,6 +134,9 @@ public sealed class LocalApiServer : IAsyncDisposable
 
     private void MapEndpoints(WebApplication app)
     {
+        app.MapOpenApi("/openapi/v1.json");
+        app.MapGet("/scalar", () => Results.Content(BuildScalarHtml(), "text/html"));
+
         app.Use(async (context, next) =>
         {
             if (!IsAllowedRequestHost(context.Request.Host.Host))
@@ -708,6 +713,24 @@ public sealed class LocalApiServer : IAsyncDisposable
 
         normalized = uri.GetLeftPart(UriPartial.Authority);
         return true;
+    }
+
+    private static string BuildScalarHtml()
+    {
+        return """
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AiyoPerps API Reference</title>
+  </head>
+  <body>
+    <script id="api-reference" data-url="/openapi/v1.json"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+  </body>
+</html>
+""";
     }
 
     private sealed class McpRpcRequest

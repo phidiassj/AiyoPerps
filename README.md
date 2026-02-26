@@ -14,9 +14,18 @@ The user interface currently supports Traditional Chinese and English, with inst
 - .NET 10 Runtime (included in the pre-release build).
 - Currently supported exchanges: [Hyperliquid](https://app.hyperliquid.xyz/) (DEX) and [BitMEX](https://www.bitmex.com/) (CEX). More will be added in the future.
 
-## 2. Start The App
-1. On Windows, run `AiyoPerps.exe`; on Linux, run `./AiyoPerps`.
-2. The default language is English, and your selection will be remembered after switching.
+## 2. Getting Started
+### Local Run
+- Download the latest precompiled release from [![GitHub Release](https://img.shields.io/github/v/release/phidiassj/AiyoPerps)](https://github.com/phidiassj/AiyoPerps/releases/latest)，or clone the repository and build it yourself using VS2026.
+- After extracting the archive, run `AiyoPerps.exe` on Windows, or `./AiyoPerps` on Linux.
+- The default UI language is English, and your selection will be remembered after you switch it.
+### Connect your AI Agents
+- If you want to use MCP or the REST API, enter the local port number (default: 5078) in the Http API field at the top of the application UI, then enable it.
+- From your AI agent, connect to `http://127.0.0.1:5078/mcp`.
+- After a successful connection, call tools/list first; you should see tools such as connections.open, market.snapshot, positions.open, and orders.cancel.
+### REST API Connection
+- You also need to enable the Http API toggle.
+- Open `http://127.0.0.1:5078/scalar` to view the full OpenAPI specification.
 
 ## 3. Top Toolbar
 - `+ Add Tab`: create a trading workspace tab.

@@ -14,9 +14,18 @@ AiyoPerps 是一套加密貨幣永續合約操作軟體，同時支援 DEX (去�
 - .NET 10 Runtime（Pre-Release 版本已自帶）。
 - 目前交易所支援 DEX [Hyperliquid](https://app.hyperliquid.xyz/) 及 CEX [BitMEX](https://www.bitmex.com/)，未來將陸續增加。
 
-## 2. 啟動軟體
-1. Windows 執行 `AiyoPerps.exe`，Linux 執行 `./AiyoPerps`。
-2. 預設語系為英文，切換後會記憶。
+## 2. 開始使用
+### 本地執行
+- 下載最新預編譯版本 [![GitHub Release](https://img.shields.io/github/v/release/phidiassj/AiyoPerps)](https://github.com/phidiassj/AiyoPerps/releases/latest)，或 clone repo 之後使用 VS2026 自行編譯。
+- 解壓縮後，Windows 執行 `AiyoPerps.exe`，Linux 執行 `./AiyoPerps`。
+- 預設 UI 語系為英文，切換後會記憶。
+### AI Agents 連接
+- 如果要使用 MCP 或 REST API，在軟體介面上方 Http API 輸入本地埠號 (預設 5078)，然後啟用。
+- 從你的 AI Agent 連接 `http://127.0.0.1:5078/mcp` 。
+- 連線成功後先呼叫 tools/list，應看到 connections.open, market.snapshot, positions.open, orders.cancel 等工具。
+### Rest API 連接
+- 同樣需要啟用 Http API 開關。
+- 瀏覽 `http://127.0.0.1:5078/scalar` ，有完整 OpenAPI 規格說明。
 
 ## 3. 上方工具列
 - `+ Add Tab`：新增交易分頁
