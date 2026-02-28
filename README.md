@@ -1,6 +1,6 @@
 # AiyoPerps
 
-[中文版本說明](./Readme_zh.md) <br>
+[中文版](./Readme_zh.md) <br>
 AiyoPerps is a cryptocurrency perpetual futures trading application that supports leveraged trading on both DEXs (decentralized exchanges) and CEXs (centralized exchanges).<br>
 Features include multi-tab market K-line charts (candlestick charts), real-time limit and market order placement for multiple trading pairs, and position/order/balance viewing and management.<br>
 This software also provides a complete set of [REST API and MCP Server](./API.md) capabilities,<br>
@@ -24,13 +24,16 @@ Even if you don’t live in Taiwan, if your invoice wins, just let us know. We�
 ### Local Run
 - Download the latest precompiled release from [![GitHub Release](https://img.shields.io/github/v/release/phidiassj/AiyoPerps)](https://github.com/phidiassj/AiyoPerps/releases/latest)，or clone the repository and build it yourself using VS2026.
 - After extracting the archive, run `AiyoPerps.exe` on Windows, or `./AiyoPerps` on Linux.
-- The default UI language is English, and your selection will be remembered after you switch it.
-### Connect your AI Agents
 - If you want to use MCP or the REST API, enter the local port number (default: 5078) in the Http API field at the top of the application UI, then enable it.
+- The default UI language is English, and your selection will be remembered after you switch it.
+### Docker
+- `docker run --name aiyoperps --rm -p 5078:5078 phidiassj/aiyoperps:latest`
+- This mode has no UI interface and can only be connected via AI Agent (MCP) or REST API after execution.
+- This mode automatically starts the HTTP API; manual activation is not required.
+### Connect your AI Agents
 - From your AI agent, connect to `http://127.0.0.1:5078/mcp`.
 - After a successful connection, call tools/list first; you should see tools such as connections.open, market.snapshot, positions.open, and orders.cancel.
 ### REST API Connection
-- You also need to enable the Http API toggle.
 - Open `http://127.0.0.1:5078/scalar` to view the full OpenAPI specification.
 
 ## 3. Top Toolbar
