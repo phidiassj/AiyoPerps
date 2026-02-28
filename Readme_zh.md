@@ -9,6 +9,12 @@ AiyoPerps 是一套加密貨幣永續合約操作軟體，同時支援 DEX (去�
 <br>
 ![Software interface](./images/main-zh-01.jpg)
 
+### 支持我們
+如果你覺得這個專案不錯，[**請我們喝杯咖啡**](https://tuunote.com/AiyoPerps/donate)吧!<br>
+**贊助我們的同時，你也會獲得參加台灣發票樂透的機會!**<br>
+因為[宸泗工作室](https://utunote.com)是誠實納稅的團隊，我們的每一筆收入都會開立發票，發票號碼每兩個月可以兌獎一次。<br>
+即使你不是台灣的居民，如果你中獎了，請通知我們。我們會幫你兌獎之後(扣除必要的手續費)匯款給你。
+
 ## 1. 環境需求
 - Windows 或 Linux 。
 - .NET 10 Runtime（Pre-Release 版本已自帶）。

@@ -25,6 +25,7 @@ public sealed class LocalApiServer : IAsyncDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private WebApplication? _app;
+    private LocalApiServerStartOptions _startOptions = new();
 
     public LocalApiServer(TradingApiService trading, AppLogger logger, Func<string, Task>? requestShutdown = null)
     {
@@ -36,7 +37,10 @@ public sealed class LocalApiServer : IAsyncDisposable
     public bool IsRunning => _app is not null;
     public int Port { get; private set; }
 
-    public async Task StartAsync(int port, CancellationToken cancellationToken = default)
+    public async Task StartAsync(
+        int port,
+        LocalApiServerStartOptions? options = null,
+        CancellationToken cancellationToken = default)
     {
         if (port is <= 0 or > 65535)
         {
@@ -56,6 +60,8 @@ public sealed class LocalApiServer : IAsyncDisposable
                 await StopInternalAsync();
             }
 
+            _startOptions = options ?? new LocalApiServerStartOptions();
+
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
                 ApplicationName = typeof(LocalApiServer).Assembly.FullName,
@@ -64,9 +70,16 @@ public sealed class LocalApiServer : IAsyncDisposable
             builder.Services.AddOpenApi();
 
             builder.WebHost.UseKestrel();
-            builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
-            builder.WebHost.UseUrls($"http://localhost:{port}");
-            builder.WebHost.UseUrls($"http://winhost:{port}");
+            if (_startOptions.BindLocalOnly)
+            {
+                builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
+                builder.WebHost.UseUrls($"http://localhost:{port}");
+                builder.WebHost.UseUrls($"http://winhost:{port}");
+            }
+            else
+            {
+                builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+            }
 
             var app = builder.Build();
             MapEndpoints(app);
@@ -74,7 +87,7 @@ public sealed class LocalApiServer : IAsyncDisposable
             _app = app;
             Port = port;
 
-            _logger.Info("Api", $"HTTP API started (localhost-only) port={port}");
+            _logger.Info("Api", $"HTTP API started ({_startOptions.BindLocalOnlyLabel}) port={port}");
         }
         finally
         {
@@ -178,7 +191,7 @@ public sealed class LocalApiServer : IAsyncDisposable
             port = Port,
             running = IsRunning,
             utcNow = DateTimeOffset.UtcNow,
-            bindScope = "localhost-only (+winhost)"
+            bindScope = _startOptions.BindLocalOnlyLabel
         }));
 
         app.MapPost("/api/v1/app/shutdown", () =>
@@ -681,8 +694,13 @@ public sealed class LocalApiServer : IAsyncDisposable
         };
     }
 
-    private static bool IsAllowedRequestHost(string? host)
+    private bool IsAllowedRequestHost(string? host)
     {
+        if (!_startOptions.BindLocalOnly)
+        {
+            return true;
+        }
+
         if (string.IsNullOrWhiteSpace(host))
         {
             return false;
@@ -692,7 +710,7 @@ public sealed class LocalApiServer : IAsyncDisposable
         return h is "localhost" or "127.0.0.1" or "::1" or "[::1]" or "winhost";
     }
 
-    private static bool TryNormalizeAllowedOrigin(string origin, out string normalized)
+    private bool TryNormalizeAllowedOrigin(string origin, out string normalized)
     {
         normalized = string.Empty;
         if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
@@ -706,7 +724,14 @@ public sealed class LocalApiServer : IAsyncDisposable
             return false;
         }
 
-        if (!IsAllowedRequestHost(uri.Host))
+        if (!_startOptions.AllowRemoteOrigins)
+        {
+            if (!IsAllowedRequestHost(uri.Host))
+            {
+                return false;
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(uri.Host))
         {
             return false;
         }
@@ -740,4 +765,12 @@ public sealed class LocalApiServer : IAsyncDisposable
         public JsonElement Params { get; set; }
         public JsonElement Id { get; set; }
     }
+}
+
+public sealed class LocalApiServerStartOptions
+{
+    public bool BindLocalOnly { get; init; } = true;
+    public bool AllowRemoteOrigins { get; init; }
+
+    public string BindLocalOnlyLabel => BindLocalOnly ? "localhost-only (+winhost)" : "all interfaces";
 }

@@ -12,6 +12,7 @@
 *.db
 AGENTS.md
 Resources/
+[Pp]ublish/
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs

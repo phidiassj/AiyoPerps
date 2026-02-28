@@ -10,8 +10,17 @@ internal class Program
     // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
     // yet and stuff might break.
     [STAThread]
-    public static void Main(string[] args) => BuildAvaloniaApp()
-        .StartWithClassicDesktopLifetime(args, ShutdownMode.OnLastWindowClose);
+    public static void Main(string[] args)
+    {
+        if (HeadlessRuntime.IsHeadless(args))
+        {
+            HeadlessRuntime.RunAsync(args).GetAwaiter().GetResult();
+            return;
+        }
+
+        BuildAvaloniaApp()
+            .StartWithClassicDesktopLifetime(args, ShutdownMode.OnLastWindowClose);
+    }
 
     // Avalonia configuration, don't remove; also used by visual designer.
     public static AppBuilder BuildAvaloniaApp()

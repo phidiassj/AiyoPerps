@@ -1,0 +1,8 @@
+.git
+.vs
+.sonarqube
+**/bin
+**/obj
+publish
+images
+*.zip
