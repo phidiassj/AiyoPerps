@@ -10,7 +10,7 @@ The user interface currently supports Traditional Chinese and English, with inst
 ![Software interface](./images/main-en-01.jpg)
 
 ### Support us
-If you think this project is cool, feel free to [**buy us a coffee**](https://tuunote.com/AiyoPerps/donate)!<br>
+If you think this project is cool, feel free to [**buy us a coffee**](https://utunote.com/AiyoPerps/donate)!<br>
 **When you sponsor us, you’ll also get a chance to join Taiwan’s receipt lottery.**<br>
 That’s because [Chen-Si Studio](https://utunote.com) is a team that pays taxes properly—we issue an official receipt/invoice for every bit of income, and those invoice numbers can be checked for prizes every two months.<br>
 Even if you don’t live in Taiwan, if your invoice wins, just let us know. We’ll claim the prize for you and then send you the money (after deducting any necessary handling fees).
