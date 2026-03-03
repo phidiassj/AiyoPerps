@@ -345,6 +345,8 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
             if (SetProperty(ref _orderType, value))
             {
                 _isLimitOrderType = IsLimitOrderText(value);
+                RaisePropertyChanged(nameof(IsMarketOrderSelected));
+                RaisePropertyChanged(nameof(IsLimitOrderSelected));
                 RaisePropertyChanged(nameof(IsLimitOrder));
                 RecalculateOrderEstimates();
             }
@@ -359,7 +361,57 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
             if (SetProperty(ref _orderSide, value))
             {
                 _isShortOrderSide = IsShortSideText(value);
+                RaisePropertyChanged(nameof(IsLongOrderSelected));
+                RaisePropertyChanged(nameof(IsShortOrderSelected));
                 RecalculateOrderEstimates();
+            }
+        }
+    }
+
+    public bool IsMarketOrderSelected
+    {
+        get => !_isLimitOrderType;
+        set
+        {
+            if (value && OrderTypes.Count > 0)
+            {
+                OrderType = OrderTypes[0];
+            }
+        }
+    }
+
+    public bool IsLimitOrderSelected
+    {
+        get => _isLimitOrderType;
+        set
+        {
+            if (value && OrderTypes.Count > 1)
+            {
+                OrderType = OrderTypes[1];
+            }
+        }
+    }
+
+    public bool IsLongOrderSelected
+    {
+        get => !_isShortOrderSide;
+        set
+        {
+            if (value && OrderSides.Count > 0)
+            {
+                OrderSide = OrderSides[0];
+            }
+        }
+    }
+
+    public bool IsShortOrderSelected
+    {
+        get => _isShortOrderSide;
+        set
+        {
+            if (value && OrderSides.Count > 1)
+            {
+                OrderSide = OrderSides[1];
             }
         }
     }
@@ -597,7 +649,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
     public bool HasBalances => Balances.Count > 0;
     public bool HasNoBalances => !HasBalances;
 
-    public string LastMarketEventDisplay => LastMarketEventAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-";
+    public string LastMarketEventDisplay => LastMarketEventAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.CurrentCulture) ?? "-";
 
     public bool MatchesBinding(Guid accountId, string symbol)
     {
@@ -761,6 +813,8 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
         {
             _orderType = nextOrderType;
             RaisePropertyChanged(nameof(OrderType));
+            RaisePropertyChanged(nameof(IsMarketOrderSelected));
+            RaisePropertyChanged(nameof(IsLimitOrderSelected));
         }
 
         var nextOrderSide = _isShortOrderSide ? orderSides[1] : orderSides[0];
@@ -768,6 +822,8 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
         {
             _orderSide = nextOrderSide;
             RaisePropertyChanged(nameof(OrderSide));
+            RaisePropertyChanged(nameof(IsLongOrderSelected));
+            RaisePropertyChanged(nameof(IsShortOrderSelected));
         }
     }
 
@@ -989,8 +1045,8 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
             var configure = await _venue.ConfigureLeverageAsync(Symbol, leverage, _cts.Token);
             if (!configure.IsSuccess)
             {
-                LastOrderResult = $"下單失敗：槓桿設定失敗：{configure.Message}";
-                _toastService.ShowError($"槓桿設定失敗：{configure.Message}");
+                LastOrderResult = $"下單失敗：{configure.Message}";
+                _toastService.ShowError(configure.Message);
                 _logger.Warn("WorkspaceTab", $"ConfigureLeverage failed tabId={TabId}, symbol={Symbol}, leverage={leverage}, msg={configure.Message}");
                 return;
             }
@@ -999,8 +1055,8 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
-            LastOrderResult = $"下單失敗：槓桿設定例外：{ex.Message}";
-            _toastService.ShowError($"槓桿設定例外：{ex.Message}");
+            LastOrderResult = $"下單失敗：{ex.Message}";
+            _toastService.ShowError(ex.Message);
             _logger.Error("WorkspaceTab", $"ConfigureLeverage exception tabId={TabId}, symbol={Symbol}, leverage={leverage}", ex);
             return;
         }

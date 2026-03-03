@@ -103,6 +103,7 @@ public sealed class CandleChartControl : Control
         }
 
         DrawTimeAxis(context, state.Visible, state.PlotArea, state.TimeAxisArea, state.CandleStep, axisLinePen, axisTextBrush);
+        DrawCurrentPriceMarker(context, state);
         DrawCrosshair(context, state);
     }
 
@@ -433,6 +434,47 @@ public sealed class CandleChartControl : Control
             timeText.Height + 4);
         context.DrawRectangle(labelBackground, labelBorder, timeRect, 3);
         context.DrawText(timeText, new Point(timeRect.X + 4, timeRect.Y + 2));
+    }
+
+    private static void DrawCurrentPriceMarker(DrawingContext context, RenderState state)
+    {
+        if (state.Visible.Count == 0)
+        {
+            return;
+        }
+
+        var lastCandle = state.Visible[^1];
+        var price = lastCandle.Close;
+        var y = Map(price, state.MinPrice, state.MaxPrice, state.PlotArea);
+        var markerColor = lastCandle.Close >= lastCandle.Open
+            ? Color.Parse("#39C7A5")
+            : Color.Parse("#E05A73");
+        var markerBrush = new SolidColorBrush(markerColor);
+        var markerPen = new Pen(markerBrush, 1, dashStyle: new DashStyle([5, 4], 0));
+        var labelTextBrush = new SolidColorBrush(Color.Parse("#D9F0F5"));
+        var labelBorder = new Pen(markerBrush, 1);
+
+        context.DrawLine(
+            markerPen,
+            new Point(state.PlotArea.Left, y),
+            new Point(state.PlotArea.Right, y));
+
+        var priceText = new FormattedText(
+            FormatNumber(price),
+            CultureInfo.InvariantCulture,
+            FlowDirection.LeftToRight,
+            new Typeface("Segoe UI"),
+            11,
+            labelTextBrush);
+
+        var labelRect = new Rect(
+            state.PriceAxisArea.X + 2,
+            y - (priceText.Height / 2) - 2,
+            priceText.Width + 8,
+            priceText.Height + 4);
+
+        context.DrawRectangle(markerBrush, labelBorder, labelRect, 3);
+        context.DrawText(priceText, new Point(labelRect.X + 4, labelRect.Y + 2));
     }
 
     private static double GetCandleCenterX(Rect plotArea, double candleStep, int index)

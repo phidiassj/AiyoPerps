@@ -1,0 +1,23 @@
+{
+  "name": "@phidiassj/aiyoperps-mcp-bridge",
+  "version": "0.8.6",
+  "description": "Stdio MCP bridge for the AiyoPerps local HTTP MCP endpoint.",
+  "license": "MIT",
+  "bin": {
+    "aiyoperps-mcp-bridge": "./bin/aiyoperps-mcp-bridge.js"
+  },
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "aiyoperps",
+    "bridge",
+    "stdio"
+  ]
+}

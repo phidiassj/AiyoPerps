@@ -4,7 +4,13 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -17,6 +23,10 @@ public sealed class LocalApiServer : IAsyncDisposable
     {
         PropertyNameCaseInsensitive = true
     };
+    private static readonly JsonSerializerOptions McpArgumentsJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
     private readonly TradingApiService _trading;
     private readonly ApiOperationStore _operations = new();
@@ -26,6 +36,8 @@ public sealed class LocalApiServer : IAsyncDisposable
 
     private WebApplication? _app;
     private LocalApiServerStartOptions _startOptions = new();
+    private IReadOnlyList<Ipv4Subnet> _allowedWslSubnets = [];
+    private HashSet<string> _localIpv4Hosts = new(StringComparer.OrdinalIgnoreCase);
 
     public LocalApiServer(TradingApiService trading, AppLogger logger, Func<string, Task>? requestShutdown = null)
     {
@@ -61,6 +73,7 @@ public sealed class LocalApiServer : IAsyncDisposable
             }
 
             _startOptions = options ?? new LocalApiServerStartOptions();
+            RefreshLocalNetworkAllowlist();
 
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
@@ -88,6 +101,10 @@ public sealed class LocalApiServer : IAsyncDisposable
             Port = port;
 
             _logger.Info("Api", $"HTTP API started ({_startOptions.BindLocalOnlyLabel}) port={port}");
+            if (_allowedWslSubnets.Count > 0)
+            {
+                _logger.Info("Api", $"WSL subnets allowed: {string.Join(", ", _allowedWslSubnets.Select(x => x.DisplayText))}");
+            }
         }
         finally
         {
@@ -152,8 +169,18 @@ public sealed class LocalApiServer : IAsyncDisposable
 
         app.Use(async (context, next) =>
         {
-            if (!IsAllowedRequestHost(context.Request.Host.Host))
+            var traceApiRequest = ShouldTraceApiRequest(context.Request.Path);
+            var requestSummary = traceApiRequest ? BuildRequestSummary(context) : string.Empty;
+            var stopwatch = traceApiRequest ? Stopwatch.StartNew() : null;
+
+            if (traceApiRequest)
             {
+                _logger.Info("Api", $"HTTP request start {requestSummary}");
+            }
+
+            if (!IsAllowedRequest(context))
+            {
+                _logger.Warn("Api", $"HTTP request forbidden host {BuildRequestSummary(context)}");
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
                 await context.Response.WriteAsJsonAsync(new { error = "Forbidden host." });
                 return;
@@ -164,6 +191,7 @@ public sealed class LocalApiServer : IAsyncDisposable
             {
                 if (!TryNormalizeAllowedOrigin(origin, out var normalizedOrigin))
                 {
+                    _logger.Warn("Api", $"HTTP request forbidden origin {BuildRequestSummary(context)}");
                     context.Response.StatusCode = StatusCodes.Status403Forbidden;
                     await context.Response.WriteAsJsonAsync(new { error = "Forbidden origin." });
                     return;
@@ -177,11 +205,22 @@ public sealed class LocalApiServer : IAsyncDisposable
                 if (HttpMethods.IsOptions(context.Request.Method))
                 {
                     context.Response.StatusCode = StatusCodes.Status204NoContent;
+                    if (traceApiRequest && stopwatch is not null)
+                    {
+                        stopwatch.Stop();
+                        _logger.Info("Api", $"HTTP request done {requestSummary}, status={context.Response.StatusCode}, elapsedMs={stopwatch.ElapsedMilliseconds}");
+                    }
                     return;
                 }
             }
 
             await next();
+
+            if (traceApiRequest && stopwatch is not null)
+            {
+                stopwatch.Stop();
+                _logger.Info("Api", $"HTTP request done {requestSummary}, status={context.Response.StatusCode}, elapsedMs={stopwatch.ElapsedMilliseconds}");
+            }
         });
 
         app.MapGet("/api/v1/health", () => Results.Ok(new
@@ -191,7 +230,8 @@ public sealed class LocalApiServer : IAsyncDisposable
             port = Port,
             running = IsRunning,
             utcNow = DateTimeOffset.UtcNow,
-            bindScope = _startOptions.BindLocalOnlyLabel
+            bindScope = _startOptions.BindLocalOnlyLabel,
+            allowedWslSubnets = _allowedWslSubnets.Select(x => x.DisplayText).ToArray()
         }));
 
         app.MapPost("/api/v1/app/shutdown", () =>
@@ -350,15 +390,18 @@ public sealed class LocalApiServer : IAsyncDisposable
                 var request = await JsonSerializer.DeserializeAsync<McpRpcRequest>(context.Request.Body, McpRequestJsonOptions, context.RequestAborted);
                 if (request is null)
                 {
+                    _logger.Warn("Api", $"MCP invalid request body {BuildRequestSummary(context)}");
                     return Results.BadRequest(new { jsonrpc = "2.0", error = new { code = -32600, message = "Invalid JSON-RPC request." }, id = (object?)null });
                 }
 
+                _logger.Info("Api", $"MCP request received method={request.Method ?? "(null)"}, id={FormatRpcIdForLog(request.Id)}, {BuildRequestSummary(context)}");
                 var response = await HandleMcpAsync(request, context.RequestAborted);
+                _logger.Info("Api", $"MCP response ready method={request.Method ?? "(null)"}, id={FormatRpcIdForLog(request.Id)}");
                 return Results.Json(response);
             }
             catch (Exception ex)
             {
-                _logger.Error("Api", "MCP request failed", ex);
+                _logger.Error("Api", $"MCP request failed {BuildRequestSummary(context)}", ex);
                 return Results.BadRequest(new { jsonrpc = "2.0", error = new { code = -32000, message = ex.Message }, id = (object?)null });
             }
         });
@@ -412,9 +455,21 @@ public sealed class LocalApiServer : IAsyncDisposable
         var method = request.Method?.Trim() ?? string.Empty;
         if (string.Equals(method, "initialize", StringComparison.OrdinalIgnoreCase))
         {
+            var negotiatedProtocolVersion = "2025-01-01";
+            if (request.Params.ValueKind == JsonValueKind.Object &&
+                request.Params.TryGetProperty("protocolVersion", out var protocolVersionElement))
+            {
+                var requestedProtocolVersion = protocolVersionElement.GetString();
+                if (!string.IsNullOrWhiteSpace(requestedProtocolVersion))
+                {
+                    negotiatedProtocolVersion = requestedProtocolVersion.Trim();
+                }
+            }
+
+            _logger.Info("Api", $"MCP initialize handled id={FormatRpcIdForLog(request.Id)}");
             return MakeResult(new
             {
-                protocolVersion = "2025-01-01",
+                protocolVersion = negotiatedProtocolVersion,
                 serverInfo = new { name = "AiyoPerps MCP", version = "1.0.0" },
                 capabilities = new { tools = new { } }
             });
@@ -422,11 +477,13 @@ public sealed class LocalApiServer : IAsyncDisposable
 
         if (string.Equals(method, "ping", StringComparison.OrdinalIgnoreCase))
         {
+            _logger.Info("Api", $"MCP ping handled id={FormatRpcIdForLog(request.Id)}");
             return MakeResult(new { ok = true, utcNow = DateTimeOffset.UtcNow });
         }
 
         if (string.Equals(method, "tools/list", StringComparison.OrdinalIgnoreCase))
         {
+            _logger.Info("Api", $"MCP tools/list handled id={FormatRpcIdForLog(request.Id)}");
             return MakeResult(new { tools = BuildMcpTools() });
         }
 
@@ -448,6 +505,11 @@ public sealed class LocalApiServer : IAsyncDisposable
         try
         {
             var payload = await ExecuteMcpToolAsync(toolName, args, cancellationToken);
+            var structuredContent = new
+            {
+                success = true,
+                result = NormalizeStructuredContent(payload)
+            };
             return MakeResult(new
             {
                 content = new[]
@@ -455,10 +517,10 @@ public sealed class LocalApiServer : IAsyncDisposable
                     new
                     {
                         type = "text",
-                        text = JsonSerializer.Serialize(payload)
+                        text = JsonSerializer.Serialize(structuredContent)
                     }
                 },
-                structuredContent = payload
+                structuredContent
             });
         }
         catch (Exception ex)
@@ -469,60 +531,61 @@ public sealed class LocalApiServer : IAsyncDisposable
 
     private async Task<object> ExecuteMcpToolAsync(string toolName, JsonElement args, CancellationToken cancellationToken)
     {
-        return toolName switch
+        var normalizedToolName = NormalizeMcpToolName(toolName);
+        return normalizedToolName switch
         {
-            "accounts.list" => _trading.ListAccounts(),
-            "accounts.get" => _trading.GetAccount(ReadGuid(args, "accountId")),
-            "accounts.create" => _trading.CreateAccount(Read<ApiAccountUpsertRequest>(args)),
-            "accounts.update" => _trading.UpdateAccount(ReadGuid(args, "accountId"), Read<ApiAccountUpsertRequest>(args)),
-            "accounts.delete" => QueueMcpOperation("delete-account", async ct =>
+            "accounts_list" => _trading.ListAccounts(),
+            "accounts_get" => _trading.GetAccount(ReadGuid(args, "accountId")),
+            "accounts_create" => _trading.CreateAccount(Read<ApiAccountUpsertRequest>(args)),
+            "accounts_update" => _trading.UpdateAccount(ReadGuid(args, "accountId"), Read<ApiAccountUpsertRequest>(args)),
+            "accounts_delete" => QueueMcpOperation("delete-account", async ct =>
             {
                 await _trading.DeleteAccountAsync(ReadGuid(args, "accountId"));
                 return new { deleted = true };
             }),
-            "symbols.list" => _trading.ListSymbols(ReadGuid(args, "accountId")),
-            "connections.list" => _trading.ListConnections(),
-            "connections.open" => QueueMcpOperation("open-connection", async ct =>
+            "symbols_list" => _trading.ListSymbols(ReadGuid(args, "accountId")),
+            "connections_list" => _trading.ListConnections(),
+            "connections_open" => QueueMcpOperation("open-connection", async ct =>
             {
                 var req = Read<ApiConnectionOpenRequest>(args);
                 return await _trading.OpenConnectionAsync(req.AccountId, req.Symbol, req.Interval, ct);
             }),
-            "connections.close" => QueueMcpOperation("close-connection", async ct =>
+            "connections_close" => QueueMcpOperation("close-connection", async ct =>
             {
                 var req = Read<ApiConnectionCloseRequest>(args);
                 var closed = await _trading.CloseConnectionAsync(req.AccountId, req.Symbol);
                 return new { req.AccountId, req.Symbol, closed };
             }),
-            "market.snapshot" => await _trading.GetMarketDataAsync(
+            "market_snapshot" => await _trading.GetMarketDataAsync(
                 ReadGuid(args, "accountId"),
                 ReadString(args, "symbol"),
                 ReadString(args, "interval", "5m"),
                 ReadNullableLong(args, "cursor"),
                 cancellationToken),
-            "market_data.get" => await _trading.GetMarketDataAsync(
+            "market_data_get" => await _trading.GetMarketDataAsync(
                 ReadGuid(args, "accountId"),
                 ReadString(args, "symbol"),
                 ReadString(args, "interval", "5m"),
                 ReadNullableLong(args, "cursor"),
                 cancellationToken),
-            "positions.list" => await _trading.ListPositionsAsync(
+            "positions_list" => await _trading.ListPositionsAsync(
                 ReadGuid(args, "accountId"),
                 ReadOptionalString(args, "symbol"),
                 cancellationToken),
-            "orders.list" => await _trading.ListOpenOrdersAsync(
+            "orders_list" => await _trading.ListOpenOrdersAsync(
                 ReadGuid(args, "accountId"),
                 ReadOptionalString(args, "symbol"),
                 cancellationToken),
-            "balances.list" => await _trading.ListBalancesAsync(
+            "balances_list" => await _trading.ListBalancesAsync(
                 ReadGuid(args, "accountId"),
                 ReadOptionalString(args, "symbol"),
                 cancellationToken),
-            "positions.open" => QueueMcpOperation("open-position", async ct => await _trading.OpenPositionAsync(Read<ApiOpenPositionRequest>(args), ct)),
-            "positions.close" => QueueMcpOperation("close-position", async ct => await _trading.ClosePositionAsync(Read<ApiClosePositionRequest>(args), ct)),
-            "orders.cancel" => QueueMcpOperation("cancel-order", async ct => await _trading.CancelOrderAsync(Read<ApiCancelOrderRequest>(args), ct)),
-            "stress.run" => QueueMcpOperation("stress-run", async ct => await _trading.RunStressAsync(Read<ApiStressRunRequest>(args), ct)),
-            "app.shutdown" => RequestShutdownFromTool(),
-            "operations.get" => _operations.Get(ReadString(args, "operationId")) ?? throw new ApiNotFoundException("Operation not found."),
+            "positions_open" => QueueMcpOperation("open-position", async ct => await _trading.OpenPositionAsync(Read<ApiOpenPositionRequest>(args), ct)),
+            "positions_close" => QueueMcpOperation("close-position", async ct => await _trading.ClosePositionAsync(Read<ApiClosePositionRequest>(args), ct)),
+            "orders_cancel" => QueueMcpOperation("cancel-order", async ct => await _trading.CancelOrderAsync(Read<ApiCancelOrderRequest>(args), ct)),
+            "stress_run" => QueueMcpOperation("stress-run", async ct => await _trading.RunStressAsync(Read<ApiStressRunRequest>(args), ct)),
+            "app_shutdown" => RequestShutdownFromTool(),
+            "operations_get" => _operations.Get(ReadString(args, "operationId")) ?? throw new ApiNotFoundException("Operation not found."),
             _ => throw new ApiBadRequestException($"Unknown tool: {toolName}")
         };
     }
@@ -563,41 +626,277 @@ public sealed class LocalApiServer : IAsyncDisposable
     {
         return
         [
-            Tool("accounts.list", "List all configured accounts."),
-            Tool("accounts.get", "Get one account by accountId."),
-            Tool("accounts.create", "Create a new account profile with credentials."),
-            Tool("accounts.update", "Update account profile and credentials by accountId."),
-            Tool("accounts.delete", "Delete account by accountId (async operation)."),
-            Tool("symbols.list", "List tradable symbols for one account."),
-            Tool("connections.list", "List active market-data connections."),
-            Tool("connections.open", "Open connection by accountId + symbol (async operation)."),
-            Tool("connections.close", "Close connection by accountId + symbol (async operation)."),
-            Tool("market.snapshot", "Get initial snapshot or cursor-based candle delta."),
-            Tool("market_data.get", "Get initial or delta candle data by cursor."),
-            Tool("positions.list", "List active positions."),
-            Tool("orders.list", "List open orders (exchange open orders)."),
-            Tool("balances.list", "List balances."),
-            Tool("positions.open", "Open position (async order operation)."),
-            Tool("positions.close", "Close position by positionId (async order operation)."),
-            Tool("orders.cancel", "Cancel order by orderId (async operation)."),
-            Tool("stress.run", "Run server-side market snapshot stress test."),
-            Tool("app.shutdown", "Request graceful app shutdown and resource release."),
-            Tool("operations.get", "Query async operation status by operationId.")
+            Tool("accounts_list", "List all configured accounts.", ObjectSchema()),
+            Tool("accounts_get", "Get one account by accountId.", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid")
+                },
+                "accountId")),
+            Tool("accounts_create", "Create a new account profile with credentials.", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["venueId"] = StringSchema("Venue name, for example BitMEX or Hyperliquid.", allowedValues: ["BitMEX", "Hyperliquid"]),
+                    ["displayName"] = StringSchema("User-facing account display name."),
+                    ["environment"] = StringSchema("Environment name, for example mainnet or testnet.", allowedValues: ["mainnet", "testnet"]),
+                    ["summary"] = StringSchema("Short summary shown in the UI."),
+                    ["apiKey"] = StringSchema("Optional API key."),
+                    ["apiSecret"] = StringSchema("Optional API secret."),
+                    ["accountAddress"] = StringSchema("Optional public account address."),
+                    ["walletAddress"] = StringSchema("Optional wallet address."),
+                    ["privateKey"] = StringSchema("Optional private key."),
+                    ["isEnabled"] = BooleanSchema("Whether the account is enabled.")
+                },
+                "venueId", "displayName", "environment", "summary")),
+            Tool("accounts_update", "Update account profile and credentials by accountId.", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["venueId"] = StringSchema("Venue name, for example BitMEX or Hyperliquid.", allowedValues: ["BitMEX", "Hyperliquid"]),
+                    ["displayName"] = StringSchema("User-facing account display name."),
+                    ["environment"] = StringSchema("Environment name, for example mainnet or testnet.", allowedValues: ["mainnet", "testnet"]),
+                    ["summary"] = StringSchema("Short summary shown in the UI."),
+                    ["apiKey"] = StringSchema("Optional API key."),
+                    ["apiSecret"] = StringSchema("Optional API secret."),
+                    ["accountAddress"] = StringSchema("Optional public account address."),
+                    ["walletAddress"] = StringSchema("Optional wallet address."),
+                    ["privateKey"] = StringSchema("Optional private key."),
+                    ["isEnabled"] = BooleanSchema("Whether the account is enabled.")
+                },
+                "accountId", "venueId", "displayName", "environment", "summary")),
+            Tool("accounts_delete", "Delete account by accountId (async operation).", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid")
+                },
+                "accountId")),
+            Tool("symbols_list", "List tradable symbols for one account.", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid")
+                },
+                "accountId")),
+            Tool("connections_list", "List active market-data connections.", ObjectSchema()),
+            Tool("connections_open", "Open connection by accountId + symbol (async operation).", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["symbol"] = StringSchema("Trading symbol, for example BTC."),
+                    ["interval"] = StringSchema("Candle interval, for example 5m.")
+                },
+                "accountId", "symbol", "interval")),
+            Tool("connections_close", "Close connection by accountId + symbol (async operation).", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["symbol"] = StringSchema("Trading symbol, for example BTC.")
+                },
+                "accountId", "symbol")),
+            Tool("market_snapshot", "Get initial snapshot or cursor-based candle delta.", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["symbol"] = StringSchema("Trading symbol, for example BTC."),
+                    ["interval"] = StringSchema("Candle interval, defaults to 5m."),
+                    ["cursor"] = IntegerSchema("Optional cursor from a previous response.")
+                },
+                "accountId", "symbol")),
+            Tool("market_data_get", "Get initial or delta candle data by cursor.", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["symbol"] = StringSchema("Trading symbol, for example BTC."),
+                    ["interval"] = StringSchema("Candle interval, defaults to 5m."),
+                    ["cursor"] = IntegerSchema("Optional cursor from a previous response.")
+                },
+                "accountId", "symbol")),
+            Tool("positions_list", "List active positions.", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["symbol"] = StringSchema("Optional symbol filter.")
+                },
+                "accountId")),
+            Tool("orders_list", "List open orders (exchange open orders).", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["symbol"] = StringSchema("Optional symbol filter.")
+                },
+                "accountId")),
+            Tool("balances_list", "List balances.", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["symbol"] = StringSchema("Optional symbol filter.")
+                },
+                "accountId")),
+            Tool("positions_open", "Open position (async order operation).", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["symbol"] = StringSchema("Trading symbol."),
+                    ["side"] = StringSchema("buy, sell, long, or short.", allowedValues: ["buy", "sell", "long", "short"]),
+                    ["orderType"] = StringSchema("market or limit.", allowedValues: ["market", "limit"]),
+                    ["leverage"] = NumberSchema("Requested leverage."),
+                    ["amount"] = NumberSchema("Input amount."),
+                    ["amountUnit"] = StringSchema("Amount unit, for example USD."),
+                    ["limitPrice"] = NumberSchema("Required for limit orders.")
+                },
+                "accountId", "symbol", "side", "orderType", "leverage", "amount", "amountUnit")),
+            Tool("positions_close", "Close position by positionId (async order operation).", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["positionId"] = StringSchema("Position identifier."),
+                    ["orderType"] = StringSchema("market or limit.", allowedValues: ["market", "limit"]),
+                    ["limitPrice"] = NumberSchema("Required for limit orders.")
+                },
+                "accountId", "positionId", "orderType")),
+            Tool("orders_cancel", "Cancel order by orderId (async operation).", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["symbol"] = StringSchema("Trading symbol."),
+                    ["orderId"] = StringSchema("Order identifier.")
+                },
+                "accountId", "symbol", "orderId")),
+            Tool("stress_run", "Run server-side market snapshot stress test.", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["symbol"] = StringSchema("Trading symbol."),
+                    ["interval"] = StringSchema("Optional candle interval."),
+                    ["concurrency"] = IntegerSchema("Optional concurrent worker count."),
+                    ["iterations"] = IntegerSchema("Optional iteration count.")
+                },
+                "accountId", "symbol")),
+            Tool("app_shutdown", "Request graceful app shutdown and resource release.", ObjectSchema()),
+            Tool("operations_get", "Query async operation status by operationId.", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["operationId"] = StringSchema("Operation identifier.")
+                },
+                "operationId"))
         ];
     }
 
-    private static object Tool(string name, string description)
+    private static string NormalizeMcpToolName(string toolName)
+    {
+        return (toolName ?? string.Empty)
+            .Trim()
+            .Replace('.', '_');
+    }
+
+    private static object NormalizeStructuredContent(object? payload)
+    {
+        if (payload is null)
+        {
+            return new Dictionary<string, object?>();
+        }
+
+        if (payload is string ||
+            payload is bool ||
+            payload is byte ||
+            payload is sbyte ||
+            payload is short ||
+            payload is ushort ||
+            payload is int ||
+            payload is uint ||
+            payload is long ||
+            payload is ulong ||
+            payload is float ||
+            payload is double ||
+            payload is decimal ||
+            payload is Guid ||
+            payload is DateTime ||
+            payload is DateTimeOffset)
+        {
+            return new Dictionary<string, object?> { ["value"] = payload };
+        }
+
+        if (payload is JsonElement jsonElement)
+        {
+            return jsonElement.ValueKind == JsonValueKind.Object
+                ? payload
+                : new Dictionary<string, object?> { ["value"] = payload };
+        }
+
+        if (payload is IEnumerable && payload is not IDictionary)
+        {
+            return new Dictionary<string, object?> { ["value"] = payload };
+        }
+
+        return payload;
+    }
+
+    private static object Tool(string name, string description, object inputSchema)
     {
         return new
         {
             name,
             description,
-            inputSchema = new
-            {
-                type = "object"
-            }
+            inputSchema
         };
     }
+
+    private static object ObjectSchema(
+        IDictionary<string, object?>? properties = null,
+        params string[] required)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["type"] = "object",
+            ["properties"] = properties ?? new Dictionary<string, object?>(),
+            ["required"] = required ?? [],
+            ["additionalProperties"] = true
+        };
+    }
+
+    private static object StringSchema(
+        string description,
+        string? format = null,
+        IReadOnlyList<string>? allowedValues = null)
+    {
+        var schema = new Dictionary<string, object?>
+        {
+            ["type"] = "string",
+            ["description"] = description
+        };
+
+        if (!string.IsNullOrWhiteSpace(format))
+        {
+            schema["format"] = format;
+        }
+
+        if (allowedValues is not null && allowedValues.Count > 0)
+        {
+            schema["enum"] = allowedValues;
+        }
+
+        return schema;
+    }
+
+    private static object NumberSchema(string description)
+        => new Dictionary<string, object?>
+        {
+            ["type"] = "number",
+            ["description"] = description
+        };
+
+    private static object IntegerSchema(string description)
+        => new Dictionary<string, object?>
+        {
+            ["type"] = "integer",
+            ["description"] = description
+        };
+
+    private static object BooleanSchema(string description)
+        => new Dictionary<string, object?>
+        {
+            ["type"] = "boolean",
+            ["description"] = description
+        };
 
     private static T Read<T>(JsonElement element)
     {
@@ -606,7 +905,7 @@ public sealed class LocalApiServer : IAsyncDisposable
             throw new ApiBadRequestException("arguments is required.");
         }
 
-        var obj = element.Deserialize<T>();
+        var obj = element.Deserialize<T>(McpArgumentsJsonOptions);
         if (obj is null)
         {
             throw new ApiBadRequestException($"arguments cannot be parsed as {typeof(T).Name}");
@@ -694,20 +993,75 @@ public sealed class LocalApiServer : IAsyncDisposable
         };
     }
 
-    private bool IsAllowedRequestHost(string? host)
+    private bool IsAllowedRequest(HttpContext context)
     {
         if (!_startOptions.BindLocalOnly)
         {
             return true;
         }
 
+        if (!IsAllowedRemoteIp(context.Connection.RemoteIpAddress))
+        {
+            return false;
+        }
+
+        return IsAllowedRequestHost(context.Request.Host.Host);
+    }
+
+    private bool IsAllowedRequestHost(string? host)
+    {
         if (string.IsNullOrWhiteSpace(host))
         {
             return false;
         }
 
         var h = host.Trim().ToLowerInvariant();
-        return h is "localhost" or "127.0.0.1" or "::1" or "[::1]" or "winhost";
+        if (h is "localhost" or "127.0.0.1" or "::1" or "[::1]" or "winhost")
+        {
+            return true;
+        }
+
+        return IPAddress.TryParse(h, out var hostIp) &&
+               hostIp.AddressFamily == AddressFamily.InterNetwork &&
+               _localIpv4Hosts.Contains(hostIp.ToString());
+    }
+
+    private static bool ShouldTraceApiRequest(PathString path)
+    {
+        return path.StartsWithSegments("/mcp", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWithSegments("/api/v1/health", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildRequestSummary(HttpContext context)
+    {
+        var remoteIp = context.Connection.RemoteIpAddress?.ToString() ?? "(null)";
+        var host = context.Request.Host.HasValue ? context.Request.Host.Value : "(null)";
+        var origin = context.Request.Headers.Origin.ToString();
+        var userAgent = context.Request.Headers.UserAgent.ToString();
+        return $"method={context.Request.Method}, path={context.Request.Path}, host={host}, remoteIp={remoteIp}, origin={TrimForLog(origin, 96)}, ua={TrimForLog(userAgent, 96)}";
+    }
+
+    private static string FormatRpcIdForLog(object? id)
+    {
+        if (id is null)
+        {
+            return "(null)";
+        }
+
+        return TrimForLog(id.ToString() ?? "(null)", 64);
+    }
+
+    private static string TrimForLog(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "-";
+        }
+
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxLength
+            ? trimmed
+            : $"{trimmed[..maxLength]}...";
     }
 
     private bool TryNormalizeAllowedOrigin(string origin, out string normalized)
@@ -740,6 +1094,99 @@ public sealed class LocalApiServer : IAsyncDisposable
         return true;
     }
 
+    private bool IsAllowedRemoteIp(IPAddress? remoteIp)
+    {
+        if (remoteIp is null)
+        {
+            return false;
+        }
+
+        if (IPAddress.IsLoopback(remoteIp))
+        {
+            return true;
+        }
+
+        if (remoteIp.IsIPv4MappedToIPv6)
+        {
+            remoteIp = remoteIp.MapToIPv4();
+        }
+
+        if (remoteIp.AddressFamily != AddressFamily.InterNetwork)
+        {
+            return false;
+        }
+
+        return _allowedWslSubnets.Any(subnet => subnet.Contains(remoteIp));
+    }
+
+    private void RefreshLocalNetworkAllowlist()
+    {
+        _allowedWslSubnets = DetectWslSubnets();
+        _localIpv4Hosts = DetectLocalIpv4Hosts();
+    }
+
+    private static IReadOnlyList<Ipv4Subnet> DetectWslSubnets()
+    {
+        var results = new List<Ipv4Subnet>();
+
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != OperationalStatus.Up)
+            {
+                continue;
+            }
+
+            var name = nic.Name ?? string.Empty;
+            var description = nic.Description ?? string.Empty;
+            var isWslAdapter =
+                name.Contains("WSL", StringComparison.OrdinalIgnoreCase) ||
+                description.Contains("WSL", StringComparison.OrdinalIgnoreCase);
+
+            if (!isWslAdapter)
+            {
+                continue;
+            }
+
+            foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
+            {
+                if (unicast.Address.AddressFamily != AddressFamily.InterNetwork ||
+                    unicast.IPv4Mask is null)
+                {
+                    continue;
+                }
+
+                results.Add(new Ipv4Subnet(unicast.Address, unicast.IPv4Mask));
+            }
+        }
+
+        return results
+            .Distinct()
+            .ToArray();
+    }
+
+    private static HashSet<string> DetectLocalIpv4Hosts()
+    {
+        var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != OperationalStatus.Up)
+            {
+                continue;
+            }
+
+            foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
+            {
+                if (unicast.Address.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    values.Add(unicast.Address.ToString());
+                }
+            }
+        }
+
+        return values;
+    }
+
     private static string BuildScalarHtml()
     {
         return """
@@ -764,6 +1211,56 @@ public sealed class LocalApiServer : IAsyncDisposable
         public string Method { get; set; } = string.Empty;
         public JsonElement Params { get; set; }
         public JsonElement Id { get; set; }
+    }
+
+    private readonly record struct Ipv4Subnet(uint Network, uint Mask)
+    {
+        public Ipv4Subnet(IPAddress address, IPAddress mask)
+            : this(
+                ToUint(address) & ToUint(mask),
+                ToUint(mask))
+        {
+        }
+
+        public string DisplayText => $"{ToDisplayIp(Network)}/{PrefixLength(Mask)}";
+
+        public bool Contains(IPAddress address)
+            => (ToUint(address) & Mask) == Network;
+
+        private static uint ToUint(IPAddress address)
+        {
+            var bytes = address.GetAddressBytes();
+            if (bytes.Length != 4)
+            {
+                throw new ArgumentException("IPv4 address required.", nameof(address));
+            }
+
+            return ((uint)bytes[0] << 24) |
+                   ((uint)bytes[1] << 16) |
+                   ((uint)bytes[2] << 8) |
+                   bytes[3];
+        }
+
+        private static string ToDisplayIp(uint value)
+            => new IPAddress(
+            [
+                (byte)(value >> 24),
+                (byte)(value >> 16),
+                (byte)(value >> 8),
+                (byte)value
+            ]).ToString();
+
+        private static int PrefixLength(uint mask)
+        {
+            var count = 0;
+            while (mask != 0)
+            {
+                count += (int)(mask & 1);
+                mask >>= 1;
+            }
+
+            return count;
+        }
     }
 }
 

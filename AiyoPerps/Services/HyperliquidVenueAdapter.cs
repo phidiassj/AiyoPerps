@@ -7,6 +7,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.WebSockets;
@@ -59,6 +60,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         _logger.Info("Hyperliquid", $"ConnectMarketData start coin={_coin}, ws={_wsBase}");
 
         _ws = new ClientWebSocket();
+        _ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
         _wsCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         await _ws.ConnectAsync(new Uri(_wsBase), _wsCts.Token);
 
@@ -132,11 +134,12 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
             var coin = NormalizeCoin(symbol);
             var asset = await ResolveAssetIndexAsync(coin, cancellationToken);
             var leverageInt = Math.Max(1, (int)Math.Round(leverage, MidpointRounding.AwayFromZero));
+            var isCross = await ResolveMarginModeAsync(coin, cancellationToken);
             var action = new
             {
                 type = "updateLeverage",
                 asset,
-                isCross = true,
+                isCross,
                 leverage = leverageInt
             };
 
@@ -158,7 +161,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                 Content = new StringContent(reqBody, Encoding.UTF8, "application/json")
             };
 
-            _logger.Info("Hyperliquid", $"ConfigureLeverage submit coin={coin}, asset={asset}, leverage={leverageInt}, rawLeverage={leverage}");
+            _logger.Info("Hyperliquid", $"ConfigureLeverage submit coin={coin}, asset={asset}, leverage={leverageInt}, rawLeverage={leverage}, isCross={isCross}");
             using var resp = await _httpClient.SendAsync(req, cancellationToken);
             var body = await resp.Content.ReadAsStringAsync(cancellationToken);
             if (!resp.IsSuccessStatusCode)
@@ -1196,28 +1199,37 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
 
     private async Task ReceiveLoopAsync(ClientWebSocket ws, CancellationToken cancellationToken)
     {
-        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
         var messageCount = 0;
 
         try
         {
             while (!cancellationToken.IsCancellationRequested && ws.State == WebSocketState.Open)
             {
-                var result = await ws.ReceiveAsync(buffer, cancellationToken);
-                if (result.MessageType == WebSocketMessageType.Close)
+                using var payload = new MemoryStream();
+                WebSocketReceiveResult result;
+                do
                 {
-                    _logger.Warn("Hyperliquid", "WS received close frame");
-                    break;
+                    result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        _logger.Warn("Hyperliquid", "WS received close frame");
+                        return;
+                    }
+
+                    if (result.Count > 0)
+                    {
+                        payload.Write(buffer, 0, result.Count);
+                    }
+                }
+                while (!result.EndOfMessage);
+
+                if (payload.Length == 0)
+                {
+                    continue;
                 }
 
-                var total = result.Count;
-                while (!result.EndOfMessage)
-                {
-                    result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer, total, buffer.Length - total), cancellationToken);
-                    total += result.Count;
-                }
-
-                var json = Encoding.UTF8.GetString(buffer, 0, total);
+                var json = Encoding.UTF8.GetString(payload.GetBuffer(), 0, (int)payload.Length);
                 ParseMessage(json);
                 _channel.Writer.TryWrite(new VenueHeartbeat(DateTimeOffset.UtcNow, "ws_message"));
 
@@ -1241,6 +1253,77 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
             ArrayPool<byte>.Shared.Return(buffer);
             _logger.Info("Hyperliquid", "WS receive loop exited");
         }
+    }
+
+    private async Task<bool> ResolveMarginModeAsync(string coin, CancellationToken cancellationToken)
+    {
+        var infoAddress = ResolveInfoAddress();
+        if (string.IsNullOrWhiteSpace(infoAddress))
+        {
+            return true;
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Serialize(new { type = "clearinghouseState", user = infoAddress });
+            using var req = new HttpRequestMessage(HttpMethod.Post, _restBase + "/info")
+            {
+                Content = new StringContent(payload, Encoding.UTF8, "application/json")
+            };
+
+            using var resp = await _httpClient.SendAsync(req, cancellationToken);
+            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.Warn("Hyperliquid", $"ResolveMarginMode failed status={(int)resp.StatusCode}, body={Trim(body)}");
+                return true;
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("assetPositions", out var positionsElement) ||
+                positionsElement.ValueKind != JsonValueKind.Array)
+            {
+                return true;
+            }
+
+            foreach (var item in positionsElement.EnumerateArray())
+            {
+                var position = item;
+                if (item.TryGetProperty("position", out var nestedPosition) && nestedPosition.ValueKind == JsonValueKind.Object)
+                {
+                    position = nestedPosition;
+                }
+
+                var rowCoin = ReadFirstString(position, "coin", "symbol", "name");
+                if (!string.Equals(rowCoin, coin, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (position.TryGetProperty("leverage", out var leverageElement) &&
+                    leverageElement.ValueKind == JsonValueKind.Object)
+                {
+                    var leverageType = ReadFirstString(leverageElement, "type", "mode");
+                    if (string.Equals(leverageType, "isolated", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return false;
+                    }
+
+                    if (string.Equals(leverageType, "cross", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+
+                break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn("Hyperliquid", $"ResolveMarginMode fallback to cross for coin={coin}: {ex.Message}");
+        }
+
+        return true;
     }
 
     private void ParseMessage(string json)
@@ -1831,6 +1914,15 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
             if (root.TryGetProperty("status", out var status) &&
                 !string.Equals(status.GetString(), "ok", StringComparison.OrdinalIgnoreCase))
             {
+                if (root.TryGetProperty("response", out var response))
+                {
+                    var responseText = ReadJsonText(response, string.Empty).Trim();
+                    if (!string.IsNullOrWhiteSpace(responseText))
+                    {
+                        return (false, false, responseText);
+                    }
+                }
+
                 return (false, false, $"exchange status={status.GetString() ?? "unknown"}");
             }
 

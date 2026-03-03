@@ -1,115 +1,81 @@
 # AiyoPerps
 
-[English version](./Readme.md) <br>
-AiyoPerps 是一套加密貨幣永續合約操作軟體，同時支援 DEX (去中心化交易平台) 及 CEX (中心化交易平台) 加密貨幣槓桿操作。<br>
-功能包括 多分頁行情 K 線圖 (蠟燭圖)、多幣別即時限價及市價下單、持倉/訂單/餘額檢視及操作等。<br>
-本軟體同時提供完整的 [REST API 及 MCP Server](./API_zh.md) 功能，<br>
-這代表你可以使用任何你喜歡的 AI Agents 進行自動化操作，或跟你一起協作，包括 [龍蝦](https://molt.bot)、[Codex](https://developers.openai.com/codex/cli)、[Gemini-CLI](https://github.com/google-gemini/gemini-cli)、[Claude-Code](https://claude.com/product/claude-code) 等。<br>
-目前軟體介面支援繁體中文及英文，可在介面即時切換，未來將陸續增加支援語系。<br>
-<br>
+[English](./README.md)
+
+AiyoPerps 是一套同時支援 CEX (中心化) 與 DEX (去中心化) 的永續合約桌面交易終端，提供完整桌面 UI、給 AI Agent 使用的 MCP Server，以及本機 REST API。<br>
+你可以基於 AiyoPerps 實現 **手動**、**與 AI 協作**，或 **完全由 AI 操作** 加密貨幣永續合約交易。
+
 ![Software interface](./images/main-zh-01.jpg)
 
-### 支持我們
-如果你覺得這個專案不錯，[**請我們喝杯咖啡**](https://utunote.com/AiyoPerps/donate)吧!<br>
-**贊助我們的同時，你也會獲得參加台灣發票樂透的機會!**<br>
-因為[宸泗工作室](https://utunote.com)是誠實納稅的團隊，我們的每一筆收入都會開立發票，發票號碼每兩個月可以兌獎一次。<br>
-即使你不是台灣的居民，如果你中獎了，請通知我們。我們會幫你兌獎之後(扣除必要的手續費)匯款給你。
-
 ## 1. 環境需求
-- Windows 或 Linux 。
-- .NET 10 Runtime（Pre-Release 版本已自帶）。
-- 目前交易所支援 DEX [Hyperliquid](https://app.hyperliquid.xyz/) 及 CEX [BitMEX](https://www.bitmex.com/)，未來將陸續增加。
+- Windows、Linux、MacOS (透過 docker)。
+- .NET 10 Runtime (發佈版本已內建)。
+- 永續合約交易平台帳號，目前支援 `Hyperliquid` 或 `BitMEX`，之後會陸續增加。
 
-## 2. 開始使用
-### 本地執行
-- 下載最新預編譯版本 [![GitHub Release](https://img.shields.io/github/v/release/phidiassj/AiyoPerps)](https://github.com/phidiassj/AiyoPerps/releases/latest)，或 clone repo 之後使用 VS2026 自行編譯。
-- 解壓縮後，Windows 執行 `AiyoPerps.exe`，Linux 執行 `./AiyoPerps`。
-- 如果要使用 MCP 或 REST API，在軟體介面上方 Http API 輸入本地埠號 (預設 5078)，然後啟用。
-- 預設 UI 語系為英文，切換後會記憶。
+## 2. 執行桌面版
+### 使用發佈版本
+1. 到 [GitHub Releases](https://github.com/phidiassj/AiyoPerps/releases/latest) 下載最新版本。
+2. 解壓縮。
+3. 執行：
+   - Windows：`AiyoPerps.exe`
+   - Linux：`./AiyoPerps`
+
+### 從原始碼編譯執行
+1. Clone 此 repo 或下載完整原始碼。<br>
+   `git clone https://github.com/phidiassj/AiyoPerps.git`
+2. 使用 [Visual Studio 2026](https://visualstudio.microsoft.com/insiders) 編譯。
+
+## 3. 啟用本機 MCP Server 及 API
+1. 啟動桌面程式。
+2. 在上方工具列設定 `HTTP API` 埠號（預設 `5078`）。
+3. 將 API 開關切到 `ON`。
+4. 可直接開啟：
+   - OpenAPI 介面：`http://127.0.0.1:5078/scalar`
+   - MCP 端點：`http://127.0.0.1:5078/mcp`
+
+## 4. 無介面模式
+只需要 REST 或 MCP 時可使用。
+
+### 本機 headless
+使用 -- headless --port 5078 啟動軟體<br>
+```bash
+Windows:
+AiyoPerps.exe -- headless --port 5078
+```
+```bash
+Linux:
+./AiyoPerps -- headless --port 5078
+```
+
 ### Docker
-- `docker run --name aiyoperps --rm -p 5078:5078 phidiassj/aiyoperps:latest`
-- 此模式無 UI 介面，執行後只能用 AI Agent (MCP) 或 Rest API 連接。
-- 此模式會自動啟動 Http API，不須手動啟用。
-### AI Agents 連接
-- 從你的 AI Agent 連接 `http://127.0.0.1:5078/mcp` 。
-- 連線成功後先呼叫 tools/list，應看到 connections.open, market.snapshot, positions.open, orders.cancel 等工具。
-### Rest API 連接
-- 瀏覽 `http://127.0.0.1:5078/scalar` ，有完整 OpenAPI 規格說明。
+MacOS 目前僅能透過 Docker 使用。<br>
+```bash
+docker run --rm --name aiyoperps -p 5078:5078 phidiassj/aiyoperps:latest
+```
+容器會自動以 headless 模式啟動，並自動開啟 HTTP API。
 
-## 3. 上方工具列
-- `+ Add Tab`：新增交易分頁
-- `Account Manager`：開啟帳號管理
-- `Language`：即時切換語言
-- `HTTP API`：
-  - Port 輸入框（僅在 API OFF 時可編輯）
-  - ON/OFF 開關啟停本機 API 服務
-  - 狀態文字顯示目前執行狀態
+## 5. 連接 AI Agent
+### 建議：使用 installer 自動安裝到支援的 AI Agent
+```bash
+npx -y @phidiassj/aiyoperps-mcp-installer
+```
+這會把 AiyoPerps 註冊到 Codex、Claude Desktop、Claude Code CLI、OpenClaw 等支援的 AI Agent。<br>
+<br>
+![Installer Interface](./images/installer.jpg)
 
-## 4. 帳號管理操作
-### 新增帳號
-1. 按 `新增帳號`。
-2. 選擇 `平台`、`環境`。
-3. 填 `顯示名稱`、`摘要`。
-4. 依平台填入憑證（可選）：
-   - `API Key`、`API Secret` (CEX 中心化平台用)
-   - `Wallet Address`（DEX 去中心化平台用）
-   - `API Wallet Address`、`API Wallet Private Key`（DEX 去中心化平台用）
-5. 按 `新增帳號` 完成。
+### 手動使用 stdio bridge
+```bash
+npx -y @phidiassj/aiyoperps-mcp-bridge --quiet --url http://127.0.0.1:5078/mcp
+```
+如果自動安裝 Installer 不支援你的 AI Agent，你可以嘗試使用這個方式。
 
-### 編輯帳號
-1. 在左側選已存在帳號。
-2. 修改憑證欄位。
-3. 按 `更新憑證`。
+## 6. UI 快速流程
+1. 開啟 `Account Manager` 新增帳號。
+2. 建立或選取一個分頁。
+3. 選擇帳號後按 `Enable`。
+4. 設定 `Symbol` 與 `Interval`。
+5. 右側可切換 `下單`、`持倉`、`訂單`、`餘額` 分頁。
 
-### 其他功能
-- `測試連線`
-- `啟用/停用`
-- `刪除`
-
-## 5. 交易分頁操作
-### 啟用分頁
-1. 在未啟用分頁中選帳號。
-2. 按 `Enable`。
-3. 系統會建立行情連線並載入 Symbol 與歷史資料。
-
-### 分頁上方
-- `Symbol` 下拉
-- `Interval` 下拉
-- `Status`
-- `Last Event`
-- `Refresh Data`（重抓並覆蓋近 12 小時資料）
-
-### K 線圖區
-- 右側價格尺規 + 下方時間尺規。
-- 滑鼠滾輪可縮放時間範圍（蠟燭根數增減）。
-- 滑鼠移動可顯示動態指標與最近蠟燭資訊。
-
-### 委託簿區
-- 級距下拉：`1 / 10 / 100`
-- 賣買盤 + spread
-- 視窗高度足夠時顯示 `最新交易`
-
-### 右側功能分頁
-- `下單`：下單類型、方向、槓桿、金額、單位、限價、預估成本/清算價
-- `持倉`：持倉清單與限價/市價平倉
-- `訂單`：未完成訂單與取消按鈕
-- `餘額`：僅顯示非零幣別
-
-## 6. UI 與 Agent 共用 Session 規則
-當 API 對同一個 `accountId + symbol` 開啟連線時：
-- UI 會自動開啟/接管對應分頁
-- UI 與 API 共用同一個後端 session
-- 關閉 UI 分頁會同步關閉 API session
-- API 關閉 session 會同步關閉 UI 分頁
-- 共用模式下 UI 會鎖定 `帳號 / Symbol / Interval`，避免衝突（toast 提示）
-
-## 7. 訊息提示
-- 所有提示統一使用底部中央 toast
-- 顯示 5 秒
-
-## 8. 本機資料
-資料儲存在執行目錄下：
-- `db/AiyoPerps.main.db`
-- `db/secrets.key`
-
-[API / MCP 詳細規格](./API_zh.md)。
+## 7. 進一步說明
+- 完整 API 與 MCP 文件：[API_zh.md](./API_zh.md)
+- English API guide: [API.md](./API.md)

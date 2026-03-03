@@ -4,6 +4,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.WebSockets;
@@ -59,6 +60,7 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
         _logger.Info("BitMEX", $"Connecting WS: {url}");
 
         _ws = new ClientWebSocket();
+        _ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
         _wsCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         await _ws.ConnectAsync(new Uri(url), _wsCts.Token);
@@ -353,30 +355,37 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
 
     private async Task ReceiveLoopAsync(ClientWebSocket ws, CancellationToken cancellationToken)
     {
-        var buffer = ArrayPool<byte>.Shared.Rent(32 * 1024);
+        var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
         var messageCount = 0;
 
         try
         {
             while (!cancellationToken.IsCancellationRequested && ws.State == WebSocketState.Open)
             {
-                var result = await ws.ReceiveAsync(buffer, cancellationToken);
-                if (result.MessageType == WebSocketMessageType.Close)
+                using var payload = new MemoryStream();
+                WebSocketReceiveResult result;
+                do
                 {
-                    _logger.Warn("BitMEX", "WS received close frame");
-                    break;
+                    result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        _logger.Warn("BitMEX", "WS received close frame");
+                        return;
+                    }
+
+                    if (result.Count > 0)
+                    {
+                        payload.Write(buffer, 0, result.Count);
+                    }
+                }
+                while (!result.EndOfMessage);
+
+                if (payload.Length == 0)
+                {
+                    continue;
                 }
 
-                var total = result.Count;
-                while (!result.EndOfMessage)
-                {
-                    result = await ws.ReceiveAsync(
-                        new ArraySegment<byte>(buffer, total, buffer.Length - total),
-                        cancellationToken);
-                    total += result.Count;
-                }
-
-                var json = Encoding.UTF8.GetString(buffer, 0, total);
+                var json = Encoding.UTF8.GetString(payload.GetBuffer(), 0, (int)payload.Length);
                 ParseMessage(json);
                 _channel.Writer.TryWrite(new VenueHeartbeat(DateTimeOffset.UtcNow, "ws_message"));
 

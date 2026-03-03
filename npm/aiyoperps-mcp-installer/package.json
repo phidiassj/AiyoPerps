@@ -1,0 +1,27 @@
+{
+  "name": "@phidiassj/aiyoperps-mcp-installer",
+  "version": "0.7.0",
+  "description": "Interactive installer for registering AiyoPerps MCP with supported AI agent hosts.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "aiyoperps-mcp-installer": "./bin/aiyoperps-mcp-installer.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin"
+  ],
+  "dependencies": {
+    "smol-toml": "^1.4.2"
+  },
+  "keywords": [
+    "mcp",
+    "aiyoperps",
+    "installer",
+    "codex",
+    "claude",
+    "openclaw"
+  ]
+}

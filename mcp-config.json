@@ -1,8 +1,14 @@
 {
   "mcpServers": {
     "aiyoperps": {
-      "transport": "streamable_http",
-      "url": "http://127.0.0.1:5078/mcp"
+      "command": "npx",
+      "args": [
+        "-y",
+        "./npm/aiyoperps-mcp-bridge",
+        "--startup-ping",
+        "--url",
+        "http://127.0.0.1:5078/mcp"
+      ]
     }
   }
 }
