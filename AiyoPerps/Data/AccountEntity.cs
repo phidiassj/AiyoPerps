@@ -20,6 +20,9 @@ public sealed class AccountEntity
     [MaxLength(256)]
     public required string Summary { get; set; }
 
+    [MaxLength(16)]
+    public string? AuthMode { get; set; }
+
     [MaxLength(2048)]
     public string? ApiKeyEncrypted { get; set; }
 
@@ -28,6 +31,9 @@ public sealed class AccountEntity
 
     [MaxLength(128)]
     public string? AccountAddress { get; set; }
+
+    [MaxLength(128)]
+    public string? SubAccountId { get; set; }
 
     [MaxLength(128)]
     public string? WalletAddress { get; set; }

@@ -61,6 +61,26 @@ public sealed class CandleRepository
         return toDelete.Count;
     }
 
+    public int DeleteAll(string venueId, string symbol, CandleInterval interval)
+    {
+        DbSchemaBootstrapper.EnsureSchema();
+        var intervalText = IntervalToText(interval);
+
+        using var db = new AppDbContext();
+        var toDelete = db.Candles
+            .Where(x => x.VenueId == venueId && x.Symbol == symbol && x.Interval == intervalText)
+            .ToList();
+
+        if (toDelete.Count == 0)
+        {
+            return 0;
+        }
+
+        db.Candles.RemoveRange(toDelete);
+        db.SaveChanges();
+        return toDelete.Count;
+    }
+
     public void Upsert(Candle candle)
     {
         DbSchemaBootstrapper.EnsureSchema();

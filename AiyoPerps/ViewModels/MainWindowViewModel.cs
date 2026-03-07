@@ -5,11 +5,13 @@ using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Input;
 
 namespace AiyoPerps.ViewModels;
 
-public sealed class MainWindowViewModel : ViewModelBase, System.IDisposable
+public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisposable
 {
     private readonly AccountStore _accountStore;
     private readonly IVenueFactory _venueFactory;
@@ -27,6 +29,7 @@ public sealed class MainWindowViewModel : ViewModelBase, System.IDisposable
     private string _httpApiPort = "5078";
     private bool _isHttpApiEnabled;
     private string _httpApiStatus = "HTTP API: OFF";
+    private int _disposeStarted;
 
     public MainWindowViewModel(AccountStore accountStore, IVenueFactory venueFactory, CandleRepository candleRepository, SymbolCatalogRepository symbolCatalogRepository, AppLogger logger, ToastService toastService, UserPreferenceRepository userPreferenceRepository, LocalApiServer localApiServer, TradingApiService tradingApiService)
     {
@@ -153,7 +156,7 @@ public sealed class MainWindowViewModel : ViewModelBase, System.IDisposable
         _ = CloseTabAsync(tab, initiatedByApi: false);
     }
 
-    private async System.Threading.Tasks.Task CloseTabAsync(WorkspaceTabViewModel tab, bool initiatedByApi)
+    private async Task CloseTabAsync(WorkspaceTabViewModel tab, bool initiatedByApi)
     {
         _logger.Info("MainWindow", $"CloseTab requested tabId={tab.TabId}");
 
@@ -185,12 +188,34 @@ public sealed class MainWindowViewModel : ViewModelBase, System.IDisposable
 
     public void Dispose()
     {
+        _ = DisposeAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposeStarted, 1) == 1)
+        {
+            return;
+        }
+
         L.PropertyChanged -= OnLocalizationChanged;
         _tradingApiService.ConnectionOpened -= OnApiConnectionOpened;
         _tradingApiService.ConnectionClosed -= OnApiConnectionClosed;
-        foreach (var tab in Tabs.ToList())
+
+        var tabs = Tabs.ToList();
+        Tabs.Clear();
+        SelectedTab = null;
+
+        foreach (var tab in tabs)
         {
-            _ = tab.DisposeAsync();
+            try
+            {
+                await tab.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn("MainWindow", $"Tab dispose warning tabId={tab.TabId}: {ex.Message}");
+            }
         }
     }
 
@@ -216,7 +241,7 @@ public sealed class MainWindowViewModel : ViewModelBase, System.IDisposable
         });
     }
 
-    private async System.Threading.Tasks.Task EnsureTabForApiConnectionAsync(ApiConnectionDto dto)
+    private async Task EnsureTabForApiConnectionAsync(ApiConnectionDto dto)
     {
         var existing = Tabs.FirstOrDefault(x => x.MatchesBinding(dto.AccountId, dto.Symbol));
         if (existing is not null)
@@ -232,7 +257,7 @@ public sealed class MainWindowViewModel : ViewModelBase, System.IDisposable
         await tab.AttachApiSessionAsync(dto);
     }
 
-    private async System.Threading.Tasks.Task SetHttpApiEnabledAsync(bool enabled)
+    private async Task SetHttpApiEnabledAsync(bool enabled)
     {
         if (enabled)
         {
@@ -254,7 +279,7 @@ public sealed class MainWindowViewModel : ViewModelBase, System.IDisposable
                 _userPreferenceRepository.SaveHttpApiEnabled(true);
                 _logger.Info("MainWindow", $"HTTP API enabled port={port}");
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 _suppressHttpApiToggle = true;
                 IsHttpApiEnabled = false;
@@ -276,7 +301,7 @@ public sealed class MainWindowViewModel : ViewModelBase, System.IDisposable
             _userPreferenceRepository.SaveHttpApiEnabled(false);
             _logger.Info("MainWindow", "HTTP API disabled");
         }
-        catch (System.Exception ex)
+        catch (Exception ex)
         {
             HttpApiStatus = "HTTP API: ERROR";
             _toastService.ShowError($"HTTP API stop failed: {ex.Message}");
@@ -287,8 +312,8 @@ public sealed class MainWindowViewModel : ViewModelBase, System.IDisposable
     private void OnLocalizationChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (!string.IsNullOrEmpty(e.PropertyName) &&
-            !string.Equals(e.PropertyName, "Item[]", System.StringComparison.Ordinal) &&
-            !string.Equals(e.PropertyName, "Item", System.StringComparison.Ordinal))
+            !string.Equals(e.PropertyName, "Item[]", StringComparison.Ordinal) &&
+            !string.Equals(e.PropertyName, "Item", StringComparison.Ordinal))
         {
             return;
         }

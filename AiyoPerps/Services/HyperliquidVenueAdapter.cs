@@ -305,7 +305,10 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                 return new OrderAck(DateTimeOffset.UtcNow, string.Empty, false, "invalid order size");
             }
 
-            var tif = price.HasValue ? "Gtc" : "Ioc";
+            // For close limit orders, prefer post-only so it won't execute as taker immediately.
+            var tif = price.HasValue
+                ? (reduceOnly ? "Alo" : "Gtc")
+                : "Ioc";
             var orderWire = new
             {
                 a = asset,

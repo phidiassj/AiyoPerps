@@ -106,6 +106,8 @@ public static class DbSchemaBootstrapper
             "CREATE UNIQUE INDEX IF NOT EXISTS IX_UserPreferences_PreferenceKey ON UserPreferences (PreferenceKey);");
 
         EnsureAccountsColumn(db.Database.GetDbConnection(), "AccountAddress", "TEXT NULL");
+        EnsureAccountsColumn(db.Database.GetDbConnection(), "SubAccountId", "TEXT NULL");
+        EnsureAccountsColumn(db.Database.GetDbConnection(), "AuthMode", "TEXT NULL");
         EnsureAccountsColumn(db.Database.GetDbConnection(), "WalletAddress", "TEXT NULL");
         EnsureAccountsColumn(db.Database.GetDbConnection(), "PrivateKeyEncrypted", "TEXT NULL");
         EnsureSymbolsColumn(db.Database.GetDbConnection(), "LastActivatedAt", "TEXT NULL");

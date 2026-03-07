@@ -7,6 +7,7 @@ using AiyoPerps.Services.Api;
 using AiyoPerps.ViewModels;
 using System;
 using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AiyoPerps;
@@ -19,6 +20,9 @@ public partial class App : Application
     public static UserPreferenceRepository UserPreferenceRepository { get; } = new();
     private static readonly ISecretProtector SecretProtector = new AesSecretProtector();
     private static readonly AccountRepository AccountRepository = new(SecretProtector);
+    private static readonly object ShutdownSync = new();
+    private static Task<bool>? ShutdownCleanupTask;
+    private static int RetentionSchedulerDisposed;
 
     public static AccountStore AccountStore { get; } = new(AccountRepository);
     public static IVenueFactory VenueFactory { get; } = new VenueFactory(Logger);
@@ -50,7 +54,7 @@ public partial class App : Application
                 await SymbolCatalogSyncService.SyncAllAsync();
                 Logger.Info("App", "Symbol catalog sync completed");
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 Logger.Error("App", "Symbol catalog sync failed", ex);
             }
@@ -66,13 +70,10 @@ public partial class App : Application
             desktop.Exit += (_, _) =>
             {
                 Logger.Info("App", "Application exit");
-                var apiDisposeTask = LocalApiServer.DisposeAsync().AsTask();
-                var tradingDisposeTask = TradingApiService.DisposeAsync().AsTask();
-                var allDisposeTask = Task.WhenAll(apiDisposeTask, tradingDisposeTask);
                 var completedInTime = false;
                 try
                 {
-                    completedInTime = allDisposeTask.Wait(TimeSpan.FromSeconds(5));
+                    completedInTime = RunShutdownCleanupAsync().GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
@@ -82,16 +83,60 @@ public partial class App : Application
                 if (!completedInTime)
                 {
                     Logger.Warn("App", "Shutdown timeout after 5s. Forcing process termination.");
-                    RetentionScheduler.Dispose();
                     ForceTerminateProcess();
-                    return;
                 }
-
-                RetentionScheduler.Dispose();
             };
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    public static Task<bool> RunShutdownCleanupAsync()
+    {
+        lock (ShutdownSync)
+        {
+            ShutdownCleanupTask ??= RunShutdownCleanupCoreAsync();
+            return ShutdownCleanupTask;
+        }
+    }
+
+    private static async Task<bool> RunShutdownCleanupCoreAsync()
+    {
+        Logger.Info("App", "Shutdown cleanup started");
+        try
+        {
+            var apiDisposeTask = LocalApiServer.DisposeAsync().AsTask();
+            var tradingDisposeTask = TradingApiService.DisposeAsync().AsTask();
+            var allDisposeTask = Task.WhenAll(apiDisposeTask, tradingDisposeTask);
+            var completedInTime = await Task.WhenAny(allDisposeTask, Task.Delay(TimeSpan.FromSeconds(5))) == allDisposeTask;
+
+            if (completedInTime)
+            {
+                try
+                {
+                    await allDisposeTask;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn("App", $"Shutdown cleanup warning: {ex.Message}");
+                }
+
+                Logger.Info("App", "Shutdown cleanup completed");
+                return true;
+            }
+
+            Logger.Warn("App", "Shutdown cleanup timeout after 5s.");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("App", "Shutdown cleanup failed", ex);
+            return false;
+        }
+        finally
+        {
+            DisposeRetentionSchedulerOnce();
+        }
     }
 
     private static Task RequestShutdownAsync(string reason)
@@ -102,6 +147,29 @@ public partial class App : Application
             return Task.CompletedTask;
         }
 
+        if (desktop.MainWindow is MainWindow mainWindow)
+        {
+            if (Dispatcher.UIThread.CheckAccess())
+            {
+                return mainWindow.BeginShutdownAsync(reason);
+            }
+
+            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Dispatcher.UIThread.Post(async () =>
+            {
+                try
+                {
+                    await mainWindow.BeginShutdownAsync(reason);
+                    tcs.SetResult();
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+            });
+            return tcs.Task;
+        }
+
         if (Dispatcher.UIThread.CheckAccess())
         {
             desktop.Shutdown();
@@ -110,6 +178,16 @@ public partial class App : Application
 
         Dispatcher.UIThread.Post(() => desktop.Shutdown());
         return Task.CompletedTask;
+    }
+
+    private static void DisposeRetentionSchedulerOnce()
+    {
+        if (Interlocked.Exchange(ref RetentionSchedulerDisposed, 1) == 1)
+        {
+            return;
+        }
+
+        RetentionScheduler.Dispose();
     }
 
     private static void ForceTerminateProcess()

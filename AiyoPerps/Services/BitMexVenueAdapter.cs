@@ -1261,7 +1261,8 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
             };
             if (reduceOnly)
             {
-                payload["execInst"] = "ReduceOnly";
+                // For close limit orders, enforce post-only to avoid taker execution.
+                payload["execInst"] = "ReduceOnly,ParticipateDoNotInitiate";
             }
 
             return JsonSerializer.Serialize(payload);

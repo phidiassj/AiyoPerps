@@ -29,6 +29,8 @@ public sealed record ApiAccountDto(
     string DisplayName,
     string Environment,
     string Summary,
+    string AuthMode,
+    string? SubAccountId,
     bool IsEnabled,
     bool HasApiCredentials,
     bool HasWalletCredentials);
@@ -38,9 +40,11 @@ public sealed record ApiAccountUpsertRequest(
     string DisplayName,
     string Environment,
     string Summary,
+    string? AuthMode,
     string? ApiKey,
     string? ApiSecret,
     string? AccountAddress,
+    string? SubAccountId,
     string? WalletAddress,
     string? PrivateKey,
     bool? IsEnabled);

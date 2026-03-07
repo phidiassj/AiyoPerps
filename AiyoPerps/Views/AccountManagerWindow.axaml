@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="AiyoPerps.Views.AccountManagerWindow"
         Width="980"
-        Height="620"
+        Height="680"
         Icon="avares://AiyoPerps/Assets/logo.ico"
         Title="{Binding L[AccountManager_WindowTitle]}">
   <Grid RowDefinitions="Auto,*,Auto" Margin="16" RowSpacing="12">
@@ -29,8 +29,7 @@
                   <TextBlock Text="{Binding VenueId}" Foreground="#8CB1BE" />
                   <TextBlock Text="{Binding Environment}" Foreground="#8CB1BE" />
                   <TextBlock Text="{Binding Summary}" Foreground="#8CB1BE" />
-                  <TextBlock Text="{Binding HasApiCredentials}" Foreground="#8CB1BE" />
-                  <TextBlock Text="{Binding HasWalletCredentials}" Foreground="#8CB1BE" />
+                  <TextBlock Text="{Binding AuthMode}" Foreground="#8CB1BE" />
                 </StackPanel>
               </DataTemplate>
             </ListBox.ItemTemplate>
@@ -39,32 +38,57 @@
       </Border>
 
       <Border Grid.Column="2" Classes="card">
-        <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" RowSpacing="8">
-          <TextBlock Text="{Binding FormModeTitle}" FontWeight="SemiBold" Classes="label" />
-          <ComboBox Grid.Row="1" ItemsSource="{Binding VenueOptions}" SelectedItem="{Binding NewVenueId}" IsEnabled="{Binding IsCreateMode}" />
-          <TextBox Grid.Row="2" Watermark="{Binding L[AccountManager_DisplayName]}" Text="{Binding NewDisplayName}" IsEnabled="{Binding IsCreateMode}" />
-          <ComboBox Grid.Row="3" ItemsSource="{Binding EnvironmentOptions}" SelectedItem="{Binding NewEnvironment}" IsEnabled="{Binding IsCreateMode}" />
-          <TextBox Grid.Row="4" Watermark="{Binding L[AccountManager_Summary]}" Text="{Binding NewSummary}" IsEnabled="{Binding IsCreateMode}" />
-          <TextBox Grid.Row="5" Watermark="{Binding L[AccountManager_ApiKey]}" Text="{Binding NewApiKey}" />
-          <TextBox Grid.Row="6" Watermark="{Binding L[AccountManager_ApiSecret]}" PasswordChar="*" Text="{Binding NewApiSecret}" />
-          <TextBox Grid.Row="7" Watermark="{Binding L[AccountManager_AccountAddress]}" Text="{Binding NewAccountAddress}" />
-          <TextBox Grid.Row="8" Watermark="{Binding L[AccountManager_ApiWalletAddress]}" Text="{Binding NewWalletAddress}" />
-          <TextBox Grid.Row="9" Watermark="{Binding L[AccountManager_ApiWalletPrivateKey]}" PasswordChar="*" Text="{Binding NewPrivateKey}" />
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" RowSpacing="8">
+            <TextBlock Text="{Binding FormModeTitle}" FontWeight="SemiBold" Classes="label" />
+            <ComboBox Grid.Row="1" ItemsSource="{Binding VenueOptions}" SelectedItem="{Binding NewVenueId}" IsEnabled="{Binding IsCreateMode}" />
+            <Border Grid.Row="2" Background="#11242C" BorderBrush="#2C5968" BorderThickness="1" CornerRadius="6" Padding="10,8">
+              <TextBlock Text="{Binding VenueCapabilityText}" Foreground="#F5C66B" TextWrapping="Wrap" />
+            </Border>
+            <TextBox Grid.Row="3" Watermark="{Binding L[AccountManager_DisplayName]}" Text="{Binding NewDisplayName}" IsEnabled="{Binding IsCreateMode}" />
+            <ComboBox Grid.Row="4" ItemsSource="{Binding EnvironmentOptions}" SelectedItem="{Binding NewEnvironment}" IsEnabled="{Binding IsCreateMode}" />
+            <TextBox Grid.Row="5" Watermark="{Binding L[AccountManager_Summary]}" Text="{Binding NewSummary}" IsEnabled="{Binding IsCreateMode}" />
 
-          <StackPanel Grid.Row="10" Orientation="Horizontal" Spacing="8">
-            <Button Content="{Binding L[AccountManager_AddAccount]}"
-                    Command="{Binding AddCommand}"
-                    Padding="16,6"
-                    Classes="cta"
-                    IsVisible="{Binding IsCreateMode}" />
-            <Button Content="{Binding L[AccountManager_UpdateCreds]}"
-                    Command="{Binding SaveCredentialsCommand}"
-                    Padding="16,6"
-                    IsVisible="{Binding IsEditMode}" />
-          </StackPanel>
+            <ComboBox Grid.Row="6" ItemsSource="{Binding AuthModeOptions}" SelectedItem="{Binding SelectedAuthModeOption}" IsEnabled="{Binding CanEditAuthMode}">
+              <ComboBox.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="{Binding Label}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+              <ComboBox.SelectionBoxItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="{Binding Label}" />
+                </DataTemplate>
+              </ComboBox.SelectionBoxItemTemplate>
+            </ComboBox>
+            <TextBox Grid.Row="7" Watermark="{Binding L[AccountManager_SubAccountId]}" Text="{Binding NewSubAccountId}" IsVisible="{Binding IsSubAccountIdRequired}" />
 
-          <TextBlock Grid.Row="11" Text="{Binding TestConnectionResult}" Foreground="#97B7C2" TextWrapping="Wrap" />
-        </Grid>
+            <TextBox Grid.Row="8" Watermark="{Binding L[AccountManager_ApiKey]}" Text="{Binding NewApiKey}" IsVisible="{Binding IsApiAuthSelected}" />
+            <TextBox Grid.Row="9" Watermark="{Binding L[AccountManager_ApiSecret]}" PasswordChar="*" Text="{Binding NewApiSecret}" IsVisible="{Binding IsApiAuthSelected}" />
+
+            <TextBox Grid.Row="10" Watermark="{Binding L[AccountManager_AccountAddress]}" Text="{Binding NewAccountAddress}" IsVisible="{Binding IsAccountAddressVisible}" />
+            <TextBox Grid.Row="11" Watermark="{Binding L[AccountManager_ApiWalletAddress]}" Text="{Binding NewWalletAddress}" IsVisible="{Binding IsWalletAuthSelected}" />
+            <TextBox Grid.Row="12" Watermark="{Binding L[AccountManager_ApiWalletPrivateKey]}" PasswordChar="*" Text="{Binding NewPrivateKey}" IsVisible="{Binding IsWalletAuthSelected}" />
+
+            <StackPanel Grid.Row="13" Orientation="Horizontal" Spacing="8">
+              <Button Content="{Binding L[AccountManager_AddAccount]}"
+                      Command="{Binding AddCommand}"
+                      Padding="16,6"
+                      Classes="cta"
+                      IsVisible="{Binding IsCreateMode}" />
+              <Button Content="{Binding L[AccountManager_UpdateCreds]}"
+                      Command="{Binding SaveCredentialsCommand}"
+                      Padding="16,6"
+                      IsVisible="{Binding IsEditMode}" />
+            </StackPanel>
+
+            <TextBlock Grid.Row="14"
+                       Text="{Binding FormStatusMessage}"
+                       Foreground="#97B7C2"
+                       TextWrapping="Wrap"
+                       IsVisible="{Binding HasFormStatusMessage}" />
+          </Grid>
+        </ScrollViewer>
       </Border>
     </Grid>
 

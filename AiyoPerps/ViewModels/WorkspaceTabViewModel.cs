@@ -1,4 +1,4 @@
-using AiyoPerps.Core;
+﻿using AiyoPerps.Core;
 using AiyoPerps.Models;
 using AiyoPerps.Services;
 using AiyoPerps.Services.Api;
@@ -15,7 +15,7 @@ using System.Windows.Input;
 
 namespace AiyoPerps.ViewModels;
 
-public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
+public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
 {
     private readonly ViewportService _viewportService = new(new OrderBookAutoHidePolicy());
     private readonly AccountStore _accountStore;
@@ -60,7 +60,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
     private bool _isConfigured;
     private bool _isOrderBookVisible = true;
     private string _symbol = "BTCUSDT";
-    private string? _selectedSymbolOption = "BTCUSDT";
+    private SymbolOptionItem? _selectedSymbolOption;
     private string _selectedInterval = "5m";
     private string _connectionStatus = "Disconnected";
     private DateTimeOffset? _lastMarketEventAt;
@@ -96,8 +96,11 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
     private IReadOnlyList<string> _orderSides = Array.Empty<string>();
     private readonly Dictionary<string, PositionState> _positionStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PendingOrderState> _pendingOrderStates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, decimal> _pendingOrderLeverageHints = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _positionClosePriceInputs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> _suppressedCanceledOrderIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _closingSymbolsInFlight = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _closeSubmitLock = new();
 
     public WorkspaceTabViewModel(AccountStore accountStore, ObservableCollection<AccountProfile> sharedAccounts, IVenueFactory venueFactory, CandleRepository candleRepository, SymbolCatalogRepository symbolCatalogRepository, AppLogger logger, ToastService toastService, UserPreferenceRepository userPreferenceRepository, TradingApiService? tradingApiService = null)
     {
@@ -113,7 +116,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
         TabId = Guid.NewGuid();
         Header = "新分頁";
         AvailableAccounts = sharedAccounts;
-        SymbolOptions = new ObservableCollection<string>();
+        SymbolOptions = new ObservableCollection<SymbolOptionItem>();
 
         var savedLeverage = _userPreferenceRepository.GetOrderLeverageOrDefault(_orderLeverage);
         if (!string.IsNullOrWhiteSpace(savedLeverage))
@@ -163,7 +166,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
     public string Header { get; private set; }
     public WorkspaceBinding? Binding { get; private set; }
     public ObservableCollection<AccountProfile> AvailableAccounts { get; }
-    public ObservableCollection<string> SymbolOptions { get; }
+    public ObservableCollection<SymbolOptionItem> SymbolOptions { get; }
 
     public ICommand ConfirmActivationCommand { get; }
     public ICommand SubmitOrderCommand { get; }
@@ -246,16 +249,17 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
             {
                 UpdateAmountUnitOptions(normalized);
 
-                if (!string.Equals(_selectedSymbolOption, normalized, StringComparison.Ordinal))
+                if (!string.Equals(_selectedSymbolOption?.Value, normalized, StringComparison.Ordinal))
                 {
-                    _selectedSymbolOption = normalized;
+                    _selectedSymbolOption = SymbolOptions.FirstOrDefault(x => string.Equals(x.Value, normalized, StringComparison.OrdinalIgnoreCase))
+                        ?? new SymbolOptionItem(normalized, SymbolDisplayText.Format(normalized));
                     RaisePropertyChanged(nameof(SelectedSymbolOption));
                 }
 
                 if (Binding is not null)
                 {
                     Binding = Binding with { Symbol = normalized };
-                    Header = $"{Binding.VenueId}:{normalized}";
+                    Header = $"{Binding.VenueId}:{SymbolDisplayText.Format(normalized)}";
                     RaisePropertyChanged(nameof(Header));
                 }
 
@@ -270,7 +274,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
         }
     }
 
-    public string? SelectedSymbolOption
+    public SymbolOptionItem? SelectedSymbolOption
     {
         get => _selectedSymbolOption;
         set
@@ -282,16 +286,16 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
                 return;
             }
 
-            var normalized = string.IsNullOrWhiteSpace(value)
+            var normalized = value is null
                 ? null
-                : value.Trim().ToUpperInvariant();
+                : SymbolOptions.FirstOrDefault(x => string.Equals(x.Value, value.Value, StringComparison.OrdinalIgnoreCase)) ?? value;
 
             if (SetProperty(ref _selectedSymbolOption, normalized))
             {
-                if (!string.IsNullOrWhiteSpace(normalized) &&
-                    !string.Equals(Symbol, normalized, StringComparison.Ordinal))
+                if (!string.IsNullOrWhiteSpace(normalized?.Value) &&
+                    !string.Equals(Symbol, normalized.Value, StringComparison.Ordinal))
                 {
-                    Symbol = normalized;
+                    Symbol = normalized.Value;
                 }
             }
         }
@@ -713,7 +717,8 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
         {
             SelectedAccount = account;
             _symbol = connection.Symbol;
-            _selectedSymbolOption = connection.Symbol;
+            _selectedSymbolOption = SymbolOptions.FirstOrDefault(x => string.Equals(x.Value, connection.Symbol, StringComparison.OrdinalIgnoreCase))
+                ?? new SymbolOptionItem(connection.Symbol, SymbolDisplayText.Format(connection.Symbol));
             _selectedInterval = string.IsNullOrWhiteSpace(connection.Interval) ? "5m" : connection.Interval;
             RaisePropertyChanged(nameof(Symbol));
             RaisePropertyChanged(nameof(SelectedSymbolOption));
@@ -726,7 +731,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
         }
 
         Binding = new WorkspaceBinding(account.VenueId, account.AccountId, connection.Symbol);
-        Header = $"{account.VenueId}:{connection.Symbol}";
+        Header = $"{account.VenueId}:{SymbolDisplayText.Format(connection.Symbol)}";
         RaisePropertyChanged(nameof(Header));
         IsConfigured = true;
         RaisePropertyChanged(nameof(CanEditMarketSessionSettings));
@@ -788,7 +793,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
         }
 
         _lastSharedLockToastAt = now;
-        _toastService.ShowWarning("此分頁由 API 共享連線管理，請透過 API 變更。");
+        _toastService.ShowWarning(L["Toast_ApiSessionLockedChangeViaApi"]);
     }
 
     private void RefreshLocalizedOrderOptions()
@@ -862,7 +867,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
 
             foreach (var sym in symbols)
             {
-                SymbolOptions.Add(sym);
+                SymbolOptions.Add(new SymbolOptionItem(sym, SymbolDisplayText.Format(sym)));
             }
 
             var preferred = ResolvePreferredSymbol(account, currentSymbol, symbols);
@@ -874,12 +879,13 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
                 }
             }
 
-            var selected = symbols.FirstOrDefault(x => string.Equals(x, Symbol, StringComparison.OrdinalIgnoreCase))
-                ?? preferred;
+            var selected = SymbolOptions.FirstOrDefault(x => string.Equals(x.Value, Symbol, StringComparison.OrdinalIgnoreCase))
+                ?? SymbolOptions.FirstOrDefault(x => string.Equals(x.Value, preferred, StringComparison.OrdinalIgnoreCase))
+                ?? (string.IsNullOrWhiteSpace(preferred) ? null : new SymbolOptionItem(preferred, SymbolDisplayText.Format(preferred)));
             _selectedSymbolOption = selected;
             RaisePropertyChanged(nameof(SelectedSymbolOption));
             RaisePropertyChanged(nameof(Symbol));
-            _logger.Info("WorkspaceTab", $"Symbol options loaded venue={account.VenueId}, env={account.Environment}, count={symbols.Count}, selected={selected}");
+            _logger.Info("WorkspaceTab", $"Symbol options loaded venue={account.VenueId}, env={account.Environment}, count={symbols.Count}, selected={selected?.Value}");
         }
         finally
         {
@@ -906,6 +912,18 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
             return hlDefault ?? symbols.FirstOrDefault() ?? "BTC";
         }
 
+        if (string.Equals(account.VenueId, "Aster", StringComparison.OrdinalIgnoreCase))
+        {
+            var asterDefault = symbols.FirstOrDefault(x => string.Equals(x, "BTCUSDT", StringComparison.OrdinalIgnoreCase));
+            return asterDefault ?? symbols.FirstOrDefault() ?? "BTCUSDT";
+        }
+
+        if (string.Equals(account.VenueId, "GRVT", StringComparison.OrdinalIgnoreCase))
+        {
+            var grvtDefault = symbols.FirstOrDefault(x => string.Equals(x, "BTC_USDT_Perp", StringComparison.OrdinalIgnoreCase));
+            return grvtDefault ?? symbols.FirstOrDefault() ?? "BTC_USDT_Perp";
+        }
+
         return symbols.FirstOrDefault() ?? currentSymbol;
     }
 
@@ -913,7 +931,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
     {
         if (_isApiSessionManaged)
         {
-            _toastService.ShowWarning("此分頁由 API 共享連線管理。");
+            _toastService.ShowWarning(L["Toast_ApiSessionLocked"]);
             return;
         }
 
@@ -927,7 +945,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
             _logger.Info("WorkspaceTab", $"Activation start tabId={TabId}, account={SelectedAccount.DisplayName}, venue={SelectedAccount.VenueId}, symbol={Symbol}");
 
             Binding = new WorkspaceBinding(SelectedAccount.VenueId, SelectedAccount.AccountId, Symbol);
-            Header = $"{SelectedAccount.VenueId}:{Symbol}";
+            Header = $"{SelectedAccount.VenueId}:{SymbolDisplayText.Format(Symbol)}";
             RaisePropertyChanged(nameof(Header));
 
             IsConfigured = true;
@@ -948,7 +966,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
             _symbolCatalogRepository.MarkActivated(SelectedAccount.VenueId, SelectedAccount.Environment, Symbol);
             LoadSymbolOptions(SelectedAccount, autoSelectSymbol: false);
             ConnectionStatus = $"Connected ({_venue.VenueId})";
-            _toastService.ShowInfo($"已連線：{_venue.VenueId} {Symbol}");
+            _toastService.ShowInfo($"{L["Toast_Connected"]}{_venue.VenueId} {SymbolDisplayText.Format(Symbol)}");
             _marketStreamSymbol = Symbol;
             StartMarketPump();
             StartAccountStatePump();
@@ -958,14 +976,14 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
         {
             ConnectionStatus = "Connection timeout";
             IsConfigured = false;
-            _toastService.ShowError("連線逾時，請檢查網路或 API 設定");
+            _toastService.ShowError(L["Toast_ConnectTimeout"]);
             _logger.Error("WorkspaceTab", $"Activation timeout tabId={TabId}", ex);
         }
         catch (Exception ex)
         {
             ConnectionStatus = $"Connection error: {ex.Message}";
             IsConfigured = false;
-            _toastService.ShowError($"連線失敗：{ex.Message}");
+            _toastService.ShowError($"{L["Toast_ConnectFailed"]}{ex.Message}");
             _logger.Error("WorkspaceTab", $"Activation failed tabId={TabId}", ex);
         }
     }
@@ -1120,6 +1138,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
             {
                 if (IsLimitOrder)
                 {
+                    RememberPendingOrderLeverageHint(Symbol, leverage, price, notionalUsd, ack.ClientOrderId);
                     UpsertPendingOrder(new PendingOrderState(
                         localOrderId,
                         Symbol,
@@ -1134,7 +1153,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
                     RemovePendingOrder(localOrderId);
                 }
 
-                _toastService.ShowInfo("下單成功");
+                _toastService.ShowInfo(L["Toast_OrderSuccess"]);
             }
             else
             {
@@ -1146,7 +1165,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
                     price,
                     $"送出失敗：{ack.Message ?? "unknown"}",
                     ack.ClientOrderId));
-                _toastService.ShowError($"下單失敗：{ack.Message}");
+                _toastService.ShowError($"{L["Toast_OrderFailed"]}{ack.Message}");
             }
 
             RemovePendingOrder(localOrderId, onlyIfStatusMatches: "送單中");
@@ -1166,7 +1185,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
                 null));
             RemovePendingOrder(localOrderId, onlyIfStatusMatches: "送單中");
             _ = RefreshAccountStateOnceAsync();
-            _toastService.ShowError($"下單例外：{ex.Message}");
+            _toastService.ShowError($"{L["Toast_OrderException"]}{ex.Message}");
             _logger.Error("WorkspaceTab", $"PlaceOrder exception tabId={TabId}", ex);
         }
     }
@@ -1226,7 +1245,7 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
 
             LastOrderResult = "下單成功";
             RemovePendingOrder(localOrderId);
-            _toastService.ShowInfo("下單成功");
+            _toastService.ShowInfo(L["Toast_OrderSuccess"]);
             _ = RefreshAccountStateOnceAsync();
             _logger.Info("WorkspaceTab", $"PlaceOrder(API shared) done tabId={TabId}, symbol={Symbol}, side={side}, type={orderType}, result={result}");
         }
@@ -1242,1220 +1261,9 @@ public sealed class WorkspaceTabViewModel : ViewModelBase, IDisposable
                 $"送出失敗：{ex.Message}",
                 null));
             RemovePendingOrder(localOrderId, onlyIfStatusMatches: "送單中");
-            _toastService.ShowError($"下單失敗：{ex.Message}");
+            _toastService.ShowError($"{L["Toast_OrderFailed"]}{ex.Message}");
             _ = RefreshAccountStateOnceAsync();
             _logger.Error("WorkspaceTab", $"PlaceOrder(API shared) exception tabId={TabId}", ex);
-        }
-    }
-
-    private void HandleTradeTick(string venueId, string symbol, TradeTick tick)
-    {
-        // Only real trades should mutate candles; synthetic mid-price updates are used for book snapshot only.
-        Candle? updated = null;
-
-        if (tick.Size > 0)
-        {
-            lock (_candleLock)
-            {
-                var interval = ParseInterval(SelectedInterval);
-                if (_currentCandle is not null && (_currentCandle.Symbol != symbol || _currentCandle.Interval != interval))
-                {
-                    _currentCandle = null;
-                }
-
-                var update = _candleAggregator.Aggregate(venueId, symbol, interval, tick, _currentCandle);
-                updated = update.Candle;
-                _currentCandle = updated;
-                _candleCache.Upsert(updated);
-            }
-
-            _candlePersistChannel.Writer.TryWrite(updated);
-            Dispatcher.UIThread.Post(() => CandleStatus = FormatCandleStatus(updated));
-        }
-
-        Dispatcher.UIThread.Post(() =>
-        {
-            UpdateOrderBookSnapshot(tick.Price);
-            UpdatePositionMarks(symbol, tick.Price);
-            if (tick.Size > 0)
-            {
-                AppendRecentTrade(tick);
-            }
-        });
-
-        if (updated is not null)
-        {
-            Dispatcher.UIThread.Post(UpdateCandleSeriesFromCache);
-        }
-    }
-
-    private void SeedCandleCacheFromStorage()
-    {
-        if (Binding is null)
-        {
-            return;
-        }
-
-        var interval = ParseInterval(SelectedInterval);
-        var recent = _candleRepository.LoadRecent(Binding.VenueId, Symbol, interval, 300);
-        lock (_candleLock)
-        {
-            foreach (var candle in recent)
-            {
-                _candleCache.Upsert(candle);
-            }
-
-            _currentCandle = recent.LastOrDefault();
-        }
-
-        MarkStorageLoaded(Binding.VenueId, Symbol, interval);
-        _logger.Info("WorkspaceTab", $"Seed from storage tabId={TabId}, symbol={Symbol}, interval={interval}, count={recent.Count}");
-    }
-
-    private async Task TryLoadVenueHistoricalCandlesAsync(CancellationToken cancellationToken)
-    {
-        if (Binding is null || _venue is not IHistoricalCandleProvider provider)
-        {
-            return;
-        }
-
-        try
-        {
-            var interval = ParseInterval(SelectedInterval);
-            var (requiredCount, since) = CalculateBackfillRequirement(interval, 12.0);
-            var dbCount = _candleRepository.CountSince(Binding.VenueId, Symbol, interval, since);
-            var inMemoryCount = _candleCache.Get(Binding.VenueId, Symbol, interval)
-                .Count(x => x.OpenTime >= since);
-
-            _logger.Info("WorkspaceTab", $"Backfill check tabId={TabId}, symbol={Symbol}, interval={interval}, required={requiredCount}, db={dbCount}, mem={inMemoryCount}");
-            if (dbCount >= requiredCount || inMemoryCount >= requiredCount)
-            {
-                return;
-            }
-
-            var fetchCount = Math.Max(120, requiredCount + 40);
-            _logger.Info("WorkspaceTab", $"Load venue historical candles start tabId={TabId}, symbol={Symbol}, interval={interval}, fetchCount={fetchCount}");
-            var recent = await provider.GetRecentCandlesAsync(Symbol, interval, fetchCount, cancellationToken);
-            lock (_candleLock)
-            {
-                foreach (var candle in recent)
-                {
-                    _candleCache.Upsert(candle);
-                    _candleRepository.Upsert(candle);
-                }
-
-                _currentCandle = recent.LastOrDefault() ?? _currentCandle;
-            }
-            MarkStorageLoaded(Binding.VenueId, Symbol, interval);
-
-            _logger.Info("WorkspaceTab", $"Load venue historical candles done tabId={TabId}, count={recent.Count}");
-        }
-        catch (Exception ex)
-        {
-            _logger.Error("WorkspaceTab", $"Load venue historical candles failed tabId={TabId}", ex);
-        }
-    }
-
-    private async Task RefreshRecentDataAsync()
-    {
-        if (!IsConfigured || Binding is null || _venue is not IHistoricalCandleProvider provider)
-        {
-            return;
-        }
-
-        await _settingsReloadGate.WaitAsync();
-        try
-        {
-            var interval = ParseInterval(SelectedInterval);
-            var (requiredCount, since) = CalculateBackfillRequirement(interval, 12.0);
-            var fetchCount = Math.Max(120, requiredCount + 40);
-
-            _logger.Info("WorkspaceTab", $"Manual refresh start tabId={TabId}, symbol={Symbol}, interval={interval}, since={since:O}, fetchCount={fetchCount}");
-
-            var deleted = _candleRepository.DeleteSince(Binding.VenueId, Symbol, interval, since);
-            _logger.Info("WorkspaceTab", $"Manual refresh deleted old candles tabId={TabId}, deleted={deleted}");
-
-            lock (_candleLock)
-            {
-                _candleCache.Clear(Binding.VenueId, Symbol, interval);
-                _currentCandle = null;
-            }
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
-            cts.CancelAfter(TimeSpan.FromSeconds(20));
-
-            var recent = await provider.GetRecentCandlesAsync(Symbol, interval, fetchCount, cts.Token);
-            lock (_candleLock)
-            {
-                foreach (var candle in recent)
-                {
-                    if (candle.OpenTime < since)
-                    {
-                        continue;
-                    }
-
-                    _candleCache.Upsert(candle);
-                    _candleRepository.Upsert(candle);
-                }
-            }
-
-            RefreshCurrentCandleFromCache();
-            _toastService.ShowInfo("資料重整完成（近 12 小時）");
-            _logger.Info("WorkspaceTab", $"Manual refresh completed tabId={TabId}, loaded={recent.Count}");
-        }
-        catch (Exception ex)
-        {
-            _toastService.ShowError($"資料重整失敗：{ex.Message}");
-            _logger.Error("WorkspaceTab", $"Manual refresh failed tabId={TabId}", ex);
-        }
-        finally
-        {
-            _settingsReloadGate.Release();
-        }
-    }
-
-    private async Task ReloadForMarketSettingChangeAsync(string reason)
-    {
-        if (_venue is null || Binding is null)
-        {
-            return;
-        }
-
-        await _settingsReloadGate.WaitAsync();
-        try
-        {
-            _logger.Info("WorkspaceTab", $"Reload start tabId={TabId}, reason={reason}, symbol={Symbol}, interval={SelectedInterval}");
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
-            cts.CancelAfter(TimeSpan.FromSeconds(15));
-
-            if (reason == "symbol")
-            {
-                await ReconnectForSymbolChangeAsync(Symbol, cts.Token);
-            }
-
-            lock (_candleLock)
-            {
-                _currentCandle = null;
-            }
-
-            await TryLoadVenueHistoricalCandlesAsync(cts.Token);
-            RefreshCurrentCandleFromCache();
-
-            if (reason == "symbol" && SelectedAccount is not null)
-            {
-                _symbolCatalogRepository.MarkActivated(SelectedAccount.VenueId, SelectedAccount.Environment, Symbol);
-                LoadSymbolOptions(SelectedAccount, autoSelectSymbol: false);
-            }
-
-            _logger.Info("WorkspaceTab", $"Reload completed tabId={TabId}, reason={reason}");
-        }
-        catch (Exception ex)
-        {
-            _logger.Error("WorkspaceTab", $"Reload failed tabId={TabId}, reason={reason}", ex);
-            _toastService.ShowError($"資料重載失敗：{ex.Message}");
-        }
-        finally
-        {
-            _settingsReloadGate.Release();
-        }
-    }
-
-    private static double IntervalToHours(CandleInterval interval)
-    {
-        return interval switch
-        {
-            CandleInterval.M5 => 5.0 / 60.0,
-            CandleInterval.M10 => 10.0 / 60.0,
-            CandleInterval.M15 => 15.0 / 60.0,
-            CandleInterval.M30 => 30.0 / 60.0,
-            CandleInterval.H1 => 1,
-            CandleInterval.H2 => 2,
-            CandleInterval.H4 => 4,
-            CandleInterval.H6 => 6,
-            CandleInterval.H12 => 12,
-            CandleInterval.D1 => 24,
-            CandleInterval.D7 => 24 * 7,
-            CandleInterval.D30 => 24 * 30,
-            _ => 1
-        };
-    }
-
-    private static (int RequiredCount, DateTimeOffset Since) CalculateBackfillRequirement(CandleInterval interval, double requiredHours)
-    {
-        var intervalHours = Math.Max(1.0 / 60.0, IntervalToHours(interval));
-        var requiredCount = Math.Max(1, (int)Math.Ceiling(requiredHours / intervalHours));
-        var since = DateTimeOffset.UtcNow.AddHours(-requiredHours);
-        return (requiredCount, since);
-    }
-
-    private void RefreshCurrentCandleFromCache()
-    {
-        if (Binding is null)
-        {
-            CandleStatus = "尚無 K 線資料";
-            return;
-        }
-
-        Candle? last;
-        lock (_candleLock)
-        {
-            var interval = ParseInterval(SelectedInterval);
-            var inMemory = _candleCache.Get(Binding.VenueId, Symbol, interval);
-
-            if (inMemory.Count == 0 && ShouldLoadFromStorage(Binding.VenueId, Symbol, interval))
-            {
-                var fromStorage = _candleRepository.LoadRecent(Binding.VenueId, Symbol, interval, 300);
-                foreach (var candle in fromStorage)
-                {
-                    _candleCache.Upsert(candle);
-                }
-
-                last = fromStorage.LastOrDefault();
-                MarkStorageLoaded(Binding.VenueId, Symbol, interval);
-                _logger.Info("WorkspaceTab", $"Load from storage for view tabId={TabId}, symbol={Symbol}, interval={interval}, count={fromStorage.Count}");
-            }
-            else
-            {
-                last = inMemory.LastOrDefault();
-            }
-
-            _currentCandle = last;
-        }
-
-        CandleStatus = last is null ? "尚無 K 線資料" : FormatCandleStatus(last);
-        UpdateCandleSeriesFromCache();
-    }
-
-    private static CandleInterval ParseInterval(string interval)
-    {
-        return interval switch
-        {
-            "5m" => CandleInterval.M5,
-            "10m" => CandleInterval.M10,
-            "15m" => CandleInterval.M15,
-            "30m" => CandleInterval.M30,
-            "1h" => CandleInterval.H1,
-            "2h" => CandleInterval.H2,
-            "4h" => CandleInterval.H4,
-            "6h" => CandleInterval.H6,
-            "12h" => CandleInterval.H12,
-            "1d" => CandleInterval.D1,
-            "7d" => CandleInterval.D7,
-            "30d" => CandleInterval.D30,
-            _ => CandleInterval.M5
-        };
-    }
-
-    private static string FormatCandleStatus(Candle candle)
-    {
-        return $"{candle.Interval}   O:{NumberText.Trim(candle.Open)}   H:{NumberText.Trim(candle.High)}   L:{NumberText.Trim(candle.Low)}   C:{NumberText.Trim(candle.Close)}   V:{NumberText.Trim(candle.Volume)}";
-    }
-
-    private static string BuildOrderBookSummary(decimal mid)
-    {
-        var ask1 = mid + 1;
-        var ask2 = mid + 2;
-        var ask3 = mid + 3;
-        var bid1 = mid - 1;
-        var bid2 = mid - 2;
-        var bid3 = mid - 3;
-
-        return
-            $"ASK {NumberText.Trim(ask3)} x {NumberText.Trim(2.00m)}\n" +
-            $"ASK {NumberText.Trim(ask2)} x {NumberText.Trim(1.50m)}\n" +
-            $"ASK {NumberText.Trim(ask1)} x {NumberText.Trim(1.00m)}\n" +
-            $"MID {NumberText.Trim(mid)}\n" +
-            $"BID {NumberText.Trim(bid1)} x {NumberText.Trim(1.20m)}\n" +
-            $"BID {NumberText.Trim(bid2)} x {NumberText.Trim(1.80m)}\n" +
-            $"BID {NumberText.Trim(bid3)} x {NumberText.Trim(2.40m)}";
-    }
-
-    private void UpdateOrderBookSnapshot(decimal mid)
-    {
-        OrderBookSummary = BuildOrderBookSummary(mid);
-        _lastMidPrice = mid;
-        var snapshot = BuildOrderBookLevels(mid, ParseOrderBookTickSize());
-        AskLevels = snapshot.Asks;
-        BidLevels = snapshot.Bids;
-        SpreadText = snapshot.SpreadText;
-        RecalculateOrderEstimates();
-    }
-
-    private static (IReadOnlyList<OrderBookLevelRow> Asks, IReadOnlyList<OrderBookLevelRow> Bids, string SpreadText) BuildOrderBookLevels(decimal mid, decimal tickSize)
-    {
-        if (mid <= 0)
-        {
-            return (Array.Empty<OrderBookLevelRow>(), Array.Empty<OrderBookLevelRow>(), "Spread -");
-        }
-
-        const int levels = 8;
-        var asks = new List<OrderBookLevelRow>(levels);
-        var bids = new List<OrderBookLevelRow>(levels);
-
-        var askTotal = 0m;
-        var bidTotal = 0m;
-        var bestAsk = decimal.Ceiling(mid / tickSize) * tickSize;
-        var bestBid = decimal.Floor(mid / tickSize) * tickSize;
-        if (bestAsk <= bestBid)
-        {
-            bestAsk = bestBid + tickSize;
-        }
-
-        for (var i = 0; i < levels; i++)
-        {
-            var step = i + 1;
-            var askPx = bestAsk + (i * tickSize);
-            var bidPx = bestBid - (i * tickSize);
-            var askSize = Math.Round(0.8m + (step * 0.34m), 2);
-            var bidSize = Math.Round(0.85m + (step * 0.32m), 2);
-            askTotal += askSize;
-            bidTotal += bidSize;
-
-            asks.Add(new OrderBookLevelRow(askPx, askSize, askTotal, IsAsk: true));
-            bids.Add(new OrderBookLevelRow(bidPx, bidSize, bidTotal, IsAsk: false));
-        }
-
-        var spread = asks[0].Price - bids[0].Price;
-        var spreadPct = mid == 0 ? 0 : (spread / mid) * 100m;
-        var spreadText = $"Spread {NumberText.Trim(spread)} ({NumberText.Trim(spreadPct)}%)";
-        asks.Reverse();
-        return (asks, bids, spreadText);
-    }
-
-    private void RecalculateOrderEstimates()
-    {
-        if (!_lastMidPrice.HasValue || _lastMidPrice.Value <= 0)
-        {
-            EstimatedCostUsd = "-";
-            EstimatedLiquidationPrice = "-";
-            return;
-        }
-
-        if (!decimal.TryParse(OrderQuantity, NumberStyles.Any, CultureInfo.InvariantCulture, out var amountInput) || amountInput <= 0)
-        {
-            EstimatedCostUsd = "-";
-            EstimatedLiquidationPrice = "-";
-            return;
-        }
-
-        if (!decimal.TryParse(OrderLeverage, NumberStyles.Any, CultureInfo.InvariantCulture, out var leverage) || leverage <= 0)
-        {
-            EstimatedCostUsd = "-";
-            EstimatedLiquidationPrice = "-";
-            return;
-        }
-
-        decimal entryPrice;
-        if (IsLimitOrder)
-        {
-            if (!decimal.TryParse(OrderPrice, NumberStyles.Any, CultureInfo.InvariantCulture, out var limitPrice) || limitPrice <= 0)
-            {
-                EstimatedCostUsd = "-";
-                EstimatedLiquidationPrice = "-";
-                return;
-            }
-
-            entryPrice = limitPrice;
-        }
-        else
-        {
-            entryPrice = _lastMidPrice.Value;
-        }
-
-        var notional = string.Equals(SelectedAmountUnit, "USD", StringComparison.OrdinalIgnoreCase)
-            ? amountInput
-            : amountInput * entryPrice;
-
-        if (notional <= 0)
-        {
-            EstimatedCostUsd = "-";
-            EstimatedLiquidationPrice = "-";
-            return;
-        }
-
-        var estimatedCost = notional / leverage;
-        var liquidation = _isShortOrderSide
-            ? entryPrice * (1m + (1m / leverage))
-            : entryPrice * (1m - (1m / leverage));
-
-        if (liquidation < 0)
-        {
-            liquidation = 0;
-        }
-
-        EstimatedCostUsd = NumberText.Trim(estimatedCost);
-        EstimatedLiquidationPrice = NumberText.Trim(liquidation);
-    }
-
-    private void UpdateAmountUnitOptions(string symbol)
-    {
-        var nextRelative = ResolveRelativeAmountUnit(symbol);
-        var hadRelativeSelected = !string.Equals(SelectedAmountUnit, "USD", StringComparison.OrdinalIgnoreCase);
-
-        if (!string.Equals(_relativeAmountUnit, nextRelative, StringComparison.Ordinal))
-        {
-            _relativeAmountUnit = nextRelative;
-            RaisePropertyChanged(nameof(RelativeAmountUnit));
-            RaisePropertyChanged(nameof(OrderAmountUnitOptions));
-        }
-
-        if (hadRelativeSelected && !string.Equals(_selectedAmountUnit, _relativeAmountUnit, StringComparison.Ordinal))
-        {
-            _selectedAmountUnit = _relativeAmountUnit;
-            RaisePropertyChanged(nameof(SelectedAmountUnit));
-        }
-
-        RecalculateOrderEstimates();
-    }
-
-    private static string ResolveRelativeAmountUnit(string symbol)
-    {
-        if (string.IsNullOrWhiteSpace(symbol))
-        {
-            return "BTC";
-        }
-
-        var upper = symbol.Trim().ToUpperInvariant();
-        if (upper.Contains(':'))
-        {
-            upper = upper[(upper.LastIndexOf(':') + 1)..];
-        }
-
-        if (upper.Contains('/'))
-        {
-            upper = upper.Split('/')[0];
-        }
-
-        if (upper.Contains('-'))
-        {
-            upper = upper.Split('-')[0];
-        }
-
-        if (upper.EndsWith("USDT", StringComparison.Ordinal) && upper.Length > 4)
-        {
-            upper = upper[..^4];
-        }
-        else if (upper.EndsWith("USDC", StringComparison.Ordinal) && upper.Length > 4)
-        {
-            upper = upper[..^4];
-        }
-        else if (upper.EndsWith("USD", StringComparison.Ordinal) && upper.Length > 3)
-        {
-            upper = upper[..^3];
-        }
-
-        return upper switch
-        {
-            "XBT" => "BTC",
-            "" => "BTC",
-            _ => upper
-        };
-    }
-
-    private decimal ParseOrderBookTickSize()
-    {
-        if (decimal.TryParse(SelectedOrderBookTickSize, NumberStyles.Any, CultureInfo.InvariantCulture, out var tick) && tick > 0)
-        {
-            return tick;
-        }
-
-        return 1m;
-    }
-
-    private void AppendRecentTrade(TradeTick tick)
-    {
-        var priorPrice = RecentTrades.Count > 0 ? RecentTrades[0].Price : (decimal?)null;
-        var side = L["Trade_Side_Flat"];
-        var priceHex = "#84AFC0";
-        var sideHex = "#84AFC0";
-        if (priorPrice.HasValue)
-        {
-            if (tick.Price >= priorPrice.Value)
-            {
-                side = L["Trade_Side_Buy"];
-                priceHex = "#5ED0A9";
-                sideHex = "#5ED0A9";
-            }
-            else
-            {
-                side = L["Trade_Side_Sell"];
-                priceHex = "#E47A8E";
-                sideHex = "#E47A8E";
-            }
-        }
-
-        var row = new RecentTradeRow(
-            tick.Timestamp.ToLocalTime(),
-            tick.Price,
-            tick.Size,
-            side,
-            priceHex,
-            sideHex);
-
-        var next = new List<RecentTradeRow>(RecentTrades.Count + 1) { row };
-        next.AddRange(RecentTrades.Take(9));
-        RecentTrades = next;
-    }
-
-    private void ApplyAccountSnapshot(VenueAccountSnapshot snapshot)
-    {
-        _positionStates.Clear();
-        foreach (var p in snapshot.Positions)
-        {
-            _positionStates[p.Symbol] = new PositionState(
-                p.Symbol,
-                p.Quantity < 0 ? "Short" : "Long",
-                p.NotionalUsd,
-                p.Leverage,
-                p.EntryPrice,
-                p.MarkPrice,
-                p.UnrealizedPnlUsd,
-                p.RealizedPnlUsd,
-                p.Quantity);
-        }
-
-        RebuildPositionRows();
-
-        CleanupSuppressedCanceledOrderIds();
-
-        _remotePendingOrders = snapshot.OpenOrders
-            .Where(x => !IsSuppressedCanceledOrderId(x.OrderId))
-            .Where(x => !IsFailedOrderStatus(x.Status))
-            .Select(x => new PendingOrderPanelRow(
-                x.Symbol,
-                $"{NumberText.Trim(x.NotionalUsd, useGrouping: true)} USD",
-                FormatLeverageText(x.Leverage),
-                x.LimitPrice.HasValue ? NumberText.Trim(x.LimitPrice.Value) : "-",
-                x.Status,
-                x.OrderId,
-                null,
-                true))
-            .ToList();
-
-        CleanupSyncedPendingOrders();
-        CleanupTransientPendingOrders();
-        RebuildPendingOrderRows();
-
-        var balances = snapshot.Balances
-            .GroupBy(x => x.Asset, StringComparer.OrdinalIgnoreCase)
-            .Select(g => new VenueBalance(
-                g.Key.ToUpperInvariant(),
-                g.Sum(x => x.Quantity),
-                g.Sum(x => x.UsdValue)))
-            .Where(x => x.Quantity != 0m)
-            .OrderBy(x => IsStableDisplayAsset(x.Asset) ? 0 : 1)
-            .ThenBy(x => x.Asset, StringComparer.OrdinalIgnoreCase)
-            .Select(x => new BalancePanelRow(
-                x.Asset.ToUpperInvariant(),
-                x.Quantity,
-                x.UsdValue))
-            .ToList();
-        Balances = balances;
-    }
-
-    private static bool IsStableDisplayAsset(string asset)
-    {
-        if (string.IsNullOrWhiteSpace(asset))
-        {
-            return false;
-        }
-
-        var upper = asset.Trim().ToUpperInvariant();
-        return upper.StartsWith("USD", StringComparison.Ordinal) ||
-               upper.StartsWith("USDT", StringComparison.Ordinal) ||
-               upper.StartsWith("USDC", StringComparison.Ordinal);
-    }
-
-    private void CleanupTransientPendingOrders()
-    {
-        var cutoff = DateTimeOffset.UtcNow.AddMinutes(-5);
-        var toRemove = _pendingOrderStates
-            .Where(x =>
-                IsPendingOrderStatusForPanel(x.Value.Status) &&
-                x.Value.CreatedAt < cutoff)
-            .Select(x => x.Key)
-            .ToList();
-
-        foreach (var id in toRemove)
-        {
-            _pendingOrderStates.Remove(id);
-        }
-
-        if (toRemove.Count > 0)
-        {
-            _logger.Info("WorkspaceTab", $"Pending order cleanup removed synced-local rows tabId={TabId}, removed={toRemove.Count}");
-        }
-    }
-
-    private void CleanupSyncedPendingOrders()
-    {
-        var remoteIds = new HashSet<string>(
-            _remotePendingOrders
-                .Select(x => x.VenueOrderId)
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Select(x => x!),
-            StringComparer.OrdinalIgnoreCase);
-
-        var toRemove = _pendingOrderStates
-            .Where(x =>
-                !string.IsNullOrWhiteSpace(x.Value.VenueOrderId) &&
-                !remoteIds.Contains(x.Value.VenueOrderId!) &&
-                x.Value.Status.Contains("待同步", StringComparison.Ordinal))
-            .Select(x => x.Key)
-            .ToList();
-
-        foreach (var id in toRemove)
-        {
-            _pendingOrderStates.Remove(id);
-        }
-    }
-
-    private static string FormatLeverageText(decimal leverage)
-    {
-        return leverage > 0
-            ? $"{NumberText.Trim(leverage)}x"
-            : "-";
-    }
-
-    private void UpsertPosition(PositionState state)
-    {
-        _positionStates[state.Symbol] = state;
-        RebuildPositionRows();
-        _logger.Info("WorkspaceTab", $"Position upsert symbol={state.Symbol}, side={state.Side}, notional={state.NotionalUsd:F2}, leverage={state.Leverage:F2}");
-    }
-
-    private void UpdatePositionMarks(string symbol, decimal markPrice)
-    {
-        if (markPrice <= 0)
-        {
-            return;
-        }
-
-        if (!_positionStates.TryGetValue(symbol, out var existing))
-        {
-            return;
-        }
-
-        if (Math.Abs(existing.MarkPrice - markPrice) < 0.0000001m)
-        {
-            return;
-        }
-
-        _positionStates[symbol] = existing with { MarkPrice = markPrice };
-        var next = _positionStates[symbol];
-        var pct = ComputeUnrealizedPnlPct(next);
-        var unrealizedUsd = next.NotionalUsd > 0
-            ? next.NotionalUsd * (pct / 100m)
-            : next.UnrealizedPnlUsd;
-        _positionStates[symbol] = next with { UnrealizedPnlUsd = unrealizedUsd };
-        RebuildPositionRows();
-    }
-
-    private void RebuildPositionRows()
-    {
-        var sortedStates = _positionStates.Values
-            .OrderBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var existingRows = _activePositions.ToDictionary(x => x.Symbol, StringComparer.OrdinalIgnoreCase);
-        var desiredSymbols = new HashSet<string>(sortedStates.Select(x => x.Symbol), StringComparer.OrdinalIgnoreCase);
-        var removedSymbols = _positionClosePriceInputs.Keys
-            .Where(x => !desiredSymbols.Contains(x))
-            .ToList();
-        foreach (var symbol in removedSymbols)
-        {
-            _positionClosePriceInputs.Remove(symbol);
-        }
-
-        for (var i = _activePositions.Count - 1; i >= 0; i--)
-        {
-            if (!desiredSymbols.Contains(_activePositions[i].Symbol))
-            {
-                _activePositions.RemoveAt(i);
-            }
-        }
-
-        for (var i = 0; i < sortedStates.Count; i++)
-        {
-            var state = sortedStates[i];
-            var closePrice = _positionClosePriceInputs.TryGetValue(state.Symbol, out var existingClosePrice) && !string.IsNullOrWhiteSpace(existingClosePrice)
-                ? existingClosePrice
-                : NumberText.Trim(state.EntryPrice > 0 ? state.EntryPrice : state.MarkPrice);
-            if (!_positionClosePriceInputs.ContainsKey(state.Symbol))
-            {
-                _positionClosePriceInputs[state.Symbol] = closePrice;
-            }
-
-            if (!existingRows.TryGetValue(state.Symbol, out var row))
-            {
-                row = new PositionPanelRow(state.Symbol, closePrice);
-                row.PropertyChanged += (_, args) =>
-                {
-                    if (string.Equals(args.PropertyName, nameof(PositionPanelRow.ClosePrice), StringComparison.Ordinal))
-                    {
-                        _positionClosePriceInputs[row.Symbol] = row.ClosePrice;
-                    }
-                };
-                _activePositions.Insert(i, row);
-            }
-            else
-            {
-                var currentIndex = _activePositions.IndexOf(row);
-                if (currentIndex != i && currentIndex >= 0)
-                {
-                    _activePositions.Move(currentIndex, i);
-                }
-            }
-
-            row.ApplyState(
-                contractAmount: $"{NumberText.Trim(state.NotionalUsd, useGrouping: true)} USD",
-                leverage: FormatLeverageText(state.Leverage),
-                entryPrice: state.EntryPrice,
-                markPrice: state.MarkPrice,
-                unrealizedPnlPct: ComputeUnrealizedPnlPct(state),
-                unrealizedPnlUsd: state.UnrealizedPnlUsd,
-                realizedPnlUsd: state.RealizedPnlUsd);
-        }
-
-        RaisePropertyChanged(nameof(HasActivePositions));
-        RaisePropertyChanged(nameof(HasNoActivePositions));
-    }
-
-    private void UpsertPendingOrder(PendingOrderState order)
-    {
-        _pendingOrderStates[order.LocalId] = order;
-        RebuildPendingOrderRows();
-    }
-
-    private void RemovePendingOrder(string localId, string? onlyIfStatusMatches = null)
-    {
-        if (!_pendingOrderStates.TryGetValue(localId, out var existing))
-        {
-            return;
-        }
-
-        if (!string.IsNullOrWhiteSpace(onlyIfStatusMatches) &&
-            !string.Equals(existing.Status, onlyIfStatusMatches, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        _pendingOrderStates.Remove(localId);
-        RebuildPendingOrderRows();
-    }
-
-    private void RebuildPendingOrderRows()
-    {
-        var localRows = _pendingOrderStates.Values
-            .Where(x => IsPendingOrderStatusForPanel(x.Status))
-            .OrderByDescending(x => x.CreatedAt)
-            .Select(x => new PendingOrderPanelRow(
-                x.Symbol,
-                $"{NumberText.Trim(x.NotionalUsd, useGrouping: true)} USD",
-                FormatLeverageText(x.Leverage),
-                x.LimitPrice.HasValue ? NumberText.Trim(x.LimitPrice.Value) : "-",
-                x.Status,
-                x.VenueOrderId,
-                x.LocalId,
-                false))
-            .ToList();
-
-        var remoteOrderIds = new HashSet<string>(
-            _remotePendingOrders
-                .Select(x => x.VenueOrderId)
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Select(x => x!),
-            StringComparer.OrdinalIgnoreCase);
-        var merged = new List<PendingOrderPanelRow>(localRows.Count + _remotePendingOrders.Count);
-        merged.AddRange(localRows.Where(x =>
-            string.IsNullOrWhiteSpace(x.VenueOrderId) ||
-            !remoteOrderIds.Contains(x.VenueOrderId)));
-        merged.AddRange(_remotePendingOrders.Where(x => !IsFailedOrderStatus(x.Status)));
-        PendingOrders = merged;
-    }
-
-    private static bool IsPendingOrderStatusForPanel(string status)
-    {
-        return string.Equals(status, "送單中", StringComparison.Ordinal) ||
-               string.Equals(status, "已送出待同步", StringComparison.Ordinal) ||
-               string.Equals(status, "平倉送單中", StringComparison.Ordinal) ||
-               string.Equals(status, "平倉已送出待同步", StringComparison.Ordinal);
-    }
-
-    private static bool IsFailedOrderStatus(string status)
-    {
-        if (string.IsNullOrWhiteSpace(status))
-        {
-            return false;
-        }
-
-        var s = status.Trim().ToLowerInvariant();
-        return s.Contains("fail", StringComparison.Ordinal) ||
-               s.Contains("error", StringComparison.Ordinal) ||
-               s.Contains("reject", StringComparison.Ordinal) ||
-               s.Contains("cancel", StringComparison.Ordinal) ||
-               s.Contains("失敗", StringComparison.Ordinal) ||
-               s.Contains("例外", StringComparison.Ordinal);
-    }
-
-    private bool IsSuppressedCanceledOrderId(string? orderId)
-    {
-        if (string.IsNullOrWhiteSpace(orderId))
-        {
-            return false;
-        }
-
-        return _suppressedCanceledOrderIds.ContainsKey(orderId);
-    }
-
-    private void SuppressCanceledOrderId(string? orderId)
-    {
-        if (string.IsNullOrWhiteSpace(orderId))
-        {
-            return;
-        }
-
-        _suppressedCanceledOrderIds[orderId] = DateTimeOffset.UtcNow;
-    }
-
-    private void CleanupSuppressedCanceledOrderIds()
-    {
-        var cutoff = DateTimeOffset.UtcNow.AddMinutes(-10);
-        var expired = _suppressedCanceledOrderIds
-            .Where(x => x.Value < cutoff)
-            .Select(x => x.Key)
-            .ToList();
-        foreach (var id in expired)
-        {
-            _suppressedCanceledOrderIds.Remove(id);
-        }
-    }
-
-    private static decimal ComputeUnrealizedPnlPct(PositionState state)
-    {
-        if (state.EntryPrice <= 0)
-        {
-            return 0;
-        }
-
-        var raw = string.Equals(state.Side, "Short", StringComparison.Ordinal)
-            ? ((state.EntryPrice - state.MarkPrice) / state.EntryPrice) * 100m
-            : ((state.MarkPrice - state.EntryPrice) / state.EntryPrice) * 100m;
-
-        return raw;
-    }
-
-    private async Task SubmitClosePositionAsync(PositionPanelRow? row, bool useLimitPrice)
-    {
-        if (_isApiSessionManaged && _tradingApiService is not null && _apiSessionAccountId.HasValue)
-        {
-            await SubmitClosePositionViaApiSessionAsync(row, useLimitPrice, _apiSessionAccountId.Value);
-            return;
-        }
-
-        if (row is null || !IsConfigured || _venue is null)
-        {
-            return;
-        }
-
-        if (!_positionStates.TryGetValue(row.Symbol, out var state))
-        {
-            _toastService.ShowError("找不到持倉資料");
-            return;
-        }
-
-        var marketReferencePrice = state.MarkPrice > 0 ? state.MarkPrice : (_lastMidPrice ?? 0m);
-        if (marketReferencePrice <= 0)
-        {
-            _toastService.ShowError("平倉失敗：尚無可用價格");
-            return;
-        }
-
-        decimal? price = null;
-        if (useLimitPrice)
-        {
-            var rawPrice = row.ClosePrice?.Trim() ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(rawPrice))
-            {
-                rawPrice = NumberText.Trim(marketReferencePrice);
-                row.ClosePrice = rawPrice;
-            }
-
-            if (!decimal.TryParse(rawPrice, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsedPrice) || parsedPrice <= 0)
-            {
-                _toastService.ShowError("平倉價格格式錯誤");
-                return;
-            }
-
-            price = parsedPrice;
-            _positionClosePriceInputs[row.Symbol] = rawPrice;
-        }
-
-        var notionalForDisplay = state.NotionalUsd > 0
-            ? Math.Abs(state.NotionalUsd)
-            : Math.Abs(state.Quantity) * marketReferencePrice;
-        if (notionalForDisplay <= 0)
-        {
-            notionalForDisplay = marketReferencePrice;
-        }
-
-        var baseQuantity = state.NotionalUsd > 0
-            ? Math.Abs(state.NotionalUsd) / marketReferencePrice
-            : Math.Abs(state.Quantity);
-        if (baseQuantity <= 0 && Math.Abs(state.Quantity) <= 0)
-        {
-            _toastService.ShowError("平倉失敗：部位數量為 0");
-            return;
-        }
-
-        var localOrderId = $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-{Guid.NewGuid():N}"[..22];
-        var side = string.Equals(state.Side, "Short", StringComparison.Ordinal) ? "Buy" : "Sell";
-        var sendingStatus = useLimitPrice ? "平倉送單中" : "平倉送單中";
-        var syncedStatus = useLimitPrice ? "平倉已送出待同步" : "平倉已送出待同步";
-
-        UpsertPendingOrder(new PendingOrderState(
-            localOrderId,
-            row.Symbol,
-            notionalForDisplay,
-            state.Leverage,
-            price,
-            sendingStatus,
-            null));
-
-        try
-        {
-            var closeQty = Math.Abs(state.Quantity);
-            if (closeQty <= 0)
-            {
-                _toastService.ShowError("平倉失敗：無法取得持倉數量");
-                RemovePendingOrder(localOrderId);
-                return;
-            }
-
-            _logger.Info("WorkspaceTab", $"ClosePosition start tabId={TabId}, symbol={row.Symbol}, side={side}, closeQty={closeQty}, rawPosQty={state.Quantity}, notionalUsd={notionalForDisplay}, useLimit={useLimitPrice}, px={price}");
-            var ack = await _venue.PlaceCloseOrderAsync(row.Symbol, side, closeQty, price, _cts.Token);
-            if (ack.Success)
-            {
-                if (useLimitPrice)
-                {
-                    UpsertPendingOrder(new PendingOrderState(
-                        localOrderId,
-                        row.Symbol,
-                        notionalForDisplay,
-                        state.Leverage,
-                        price,
-                        syncedStatus,
-                        ack.ClientOrderId));
-                }
-                else
-                {
-                    RemovePendingOrder(localOrderId);
-                }
-
-                _toastService.ShowInfo(useLimitPrice ? "平倉限價單已送出" : "平倉市價單已送出");
-            }
-            else
-            {
-                RemovePendingOrder(localOrderId);
-                _toastService.ShowError($"平倉失敗：{ack.Message}");
-            }
-
-            RemovePendingOrder(localOrderId, onlyIfStatusMatches: sendingStatus);
-            _ = RefreshAccountStateOnceAsync();
-            _logger.Info("WorkspaceTab", $"ClosePosition done tabId={TabId}, symbol={row.Symbol}, success={ack.Success}, msg={ack.Message}");
-        }
-        catch (Exception ex)
-        {
-            RemovePendingOrder(localOrderId);
-            _ = RefreshAccountStateOnceAsync();
-            _toastService.ShowError($"平倉例外：{ex.Message}");
-            _logger.Error("WorkspaceTab", $"ClosePosition exception tabId={TabId}, symbol={row.Symbol}", ex);
-        }
-    }
-
-    private async Task SubmitClosePositionViaApiSessionAsync(PositionPanelRow? row, bool useLimitPrice, Guid accountId)
-    {
-        if (row is null || !_positionStates.TryGetValue(row.Symbol, out var state))
-        {
-            return;
-        }
-
-        decimal? price = null;
-        if (useLimitPrice)
-        {
-            var rawPrice = row.ClosePrice?.Trim() ?? string.Empty;
-            if (!decimal.TryParse(rawPrice, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsedPrice) || parsedPrice <= 0)
-            {
-                _toastService.ShowError("平倉價格格式錯誤");
-                return;
-            }
-
-            price = parsedPrice;
-            _positionClosePriceInputs[row.Symbol] = rawPrice;
-        }
-
-        var localOrderId = $"{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-{Guid.NewGuid():N}"[..22];
-        UpsertPendingOrder(new PendingOrderState(
-            localOrderId,
-            row.Symbol,
-            state.NotionalUsd > 0 ? Math.Abs(state.NotionalUsd) : 0m,
-            state.Leverage,
-            price,
-            "平倉送單中",
-            null));
-
-        try
-        {
-            var orderType = useLimitPrice ? "limit" : "market";
-            var result = await _tradingApiService!.ClosePositionAsync(
-                new ApiClosePositionRequest(
-                    accountId,
-                    row.Symbol,
-                    orderType,
-                    price),
-                _cts.Token);
-
-            RemovePendingOrder(localOrderId);
-            _toastService.ShowInfo(useLimitPrice ? "平倉限價單已送出" : "平倉市價單已送出");
-            _ = RefreshAccountStateOnceAsync();
-            _logger.Info("WorkspaceTab", $"ClosePosition(API shared) done tabId={TabId}, symbol={row.Symbol}, useLimit={useLimitPrice}, result={result}");
-        }
-        catch (Exception ex)
-        {
-            RemovePendingOrder(localOrderId);
-            _toastService.ShowError($"平倉失敗：{ex.Message}");
-            _ = RefreshAccountStateOnceAsync();
-            _logger.Error("WorkspaceTab", $"ClosePosition(API shared) exception tabId={TabId}, symbol={row.Symbol}", ex);
-        }
-    }
-
-    private async Task CancelPendingOrderAsync(PendingOrderPanelRow? row)
-    {
-        if (_isApiSessionManaged && _tradingApiService is not null && _apiSessionAccountId.HasValue)
-        {
-            await CancelPendingOrderViaApiSessionAsync(row, _apiSessionAccountId.Value);
-            return;
-        }
-
-        if (row is null || _venue is null || !IsConfigured)
-        {
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(row.VenueOrderId))
-        {
-            if (!string.IsNullOrWhiteSpace(row.LocalOrderId))
-            {
-                _logger.Info("WorkspaceTab", $"CancelPending local-only remove tabId={TabId}, symbol={row.Symbol}, localId={row.LocalOrderId}");
-                RemovePendingOrder(row.LocalOrderId);
-                _toastService.ShowInfo("本地待同步訂單已移除");
-            }
-            else
-            {
-                _toastService.ShowWarning("此訂單目前無可取消識別碼");
-            }
-
-            return;
-        }
-
-        try
-        {
-            _logger.Info("WorkspaceTab", $"CancelPending start tabId={TabId}, symbol={row.Symbol}, orderId={row.VenueOrderId}");
-            var ack = await _venue.CancelOrderAsync(row.Symbol, row.VenueOrderId, _cts.Token);
-            if (ack.Success)
-            {
-                SuppressCanceledOrderId(row.VenueOrderId);
-                _remotePendingOrders = _remotePendingOrders
-                    .Where(x => !string.Equals(x.VenueOrderId, row.VenueOrderId, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-                RebuildPendingOrderRows();
-
-                if (!string.IsNullOrWhiteSpace(row.LocalOrderId))
-                {
-                    RemovePendingOrder(row.LocalOrderId);
-                }
-
-                _toastService.ShowInfo("訂單取消成功");
-                _ = RefreshAccountStateOnceAsync();
-            }
-            else
-            {
-                if ((ack.Message ?? string.Empty).Contains("invalid", StringComparison.OrdinalIgnoreCase))
-                {
-                    SuppressCanceledOrderId(row.VenueOrderId);
-                    _remotePendingOrders = _remotePendingOrders
-                        .Where(x => !string.Equals(x.VenueOrderId, row.VenueOrderId, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-                    RebuildPendingOrderRows();
-                    _ = RefreshAccountStateOnceAsync();
-                }
-
-                _toastService.ShowError($"取消失敗：{ack.Message ?? "unknown"}");
-            }
-
-            _logger.Info("WorkspaceTab", $"CancelPending done tabId={TabId}, symbol={row.Symbol}, orderId={row.VenueOrderId}, success={ack.Success}, msg={ack.Message}");
-        }
-        catch (Exception ex)
-        {
-            _toastService.ShowError($"取消例外：{ex.Message}");
-            _logger.Error("WorkspaceTab", $"CancelPending exception tabId={TabId}, symbol={row.Symbol}, orderId={row.VenueOrderId}", ex);
-        }
-    }
-
-    private async Task CancelPendingOrderViaApiSessionAsync(PendingOrderPanelRow? row, Guid accountId)
-    {
-        if (row is null || !IsConfigured)
-        {
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(row.VenueOrderId))
-        {
-            if (!string.IsNullOrWhiteSpace(row.LocalOrderId))
-            {
-                _logger.Info("WorkspaceTab", $"CancelPending(API shared) local remove tabId={TabId}, symbol={row.Symbol}, localId={row.LocalOrderId}");
-                RemovePendingOrder(row.LocalOrderId);
-                _toastService.ShowInfo("本地待同步訂單已移除");
-            }
-            else
-            {
-                _toastService.ShowWarning("此訂單目前無可取消識別碼");
-            }
-
-            return;
-        }
-
-        try
-        {
-            await _tradingApiService!.CancelOrderAsync(new ApiCancelOrderRequest(accountId, row.Symbol, row.VenueOrderId), _cts.Token);
-            SuppressCanceledOrderId(row.VenueOrderId);
-            _remotePendingOrders = _remotePendingOrders
-                .Where(x => !string.Equals(x.VenueOrderId, row.VenueOrderId, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            RebuildPendingOrderRows();
-
-            if (!string.IsNullOrWhiteSpace(row.LocalOrderId))
-            {
-                RemovePendingOrder(row.LocalOrderId);
-            }
-
-            _toastService.ShowInfo("訂單取消成功");
-            _ = RefreshAccountStateOnceAsync();
-        }
-        catch (Exception ex)
-        {
-            if ((ex.Message ?? string.Empty).Contains("invalid", StringComparison.OrdinalIgnoreCase))
-            {
-                SuppressCanceledOrderId(row.VenueOrderId);
-                _remotePendingOrders = _remotePendingOrders
-                    .Where(x => !string.Equals(x.VenueOrderId, row.VenueOrderId, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-                RebuildPendingOrderRows();
-                _ = RefreshAccountStateOnceAsync();
-            }
-
-            _toastService.ShowError($"取消失敗：{ex.Message}");
-            _logger.Error("WorkspaceTab", $"CancelPending(API shared) exception tabId={TabId}, symbol={row.Symbol}, orderId={row.VenueOrderId}", ex);
         }
     }
 
@@ -3007,6 +1815,7 @@ public sealed class PositionPanelRow : ViewModelBase
     }
 
     public string Symbol { get; }
+    public string DisplaySymbol => SymbolDisplayText.Format(Symbol);
     public string ContractAmount
     {
         get => _contractAmount;
@@ -3126,6 +1935,7 @@ public sealed record PendingOrderPanelRow(
     string? LocalOrderId,
     bool IsExchangeOrder)
 {
+    public string DisplaySymbol => SymbolDisplayText.Format(Symbol);
     public string VenueOrderIdDisplay => string.IsNullOrWhiteSpace(VenueOrderId) ? "-" : VenueOrderId!;
 }
 
@@ -3133,6 +1943,34 @@ public sealed record BalancePanelRow(string Coin, decimal Quantity, decimal UsdV
 {
     public string QuantityText => NumberText.Trim(decimal.Round(Quantity, 5, MidpointRounding.AwayFromZero), 5, useGrouping: true);
     public string UsdText => NumberText.Trim(decimal.Round(UsdValue, 5, MidpointRounding.AwayFromZero), 5, useGrouping: true);
+}
+
+public sealed record SymbolOptionItem(string Value, string Display)
+{
+    public override string ToString() => Display;
+}
+
+public static class SymbolDisplayText
+{
+    public static string Format(string symbol)
+    {
+        var normalized = (symbol ?? string.Empty).Trim().ToUpperInvariant();
+
+        var parts = normalized.Split('_', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 3 && string.Equals(parts[2], "PERP", StringComparison.Ordinal))
+        {
+            var baseAsset = parts[0];
+            var quoteAsset = parts[1];
+            if (quoteAsset is "USDT" or "USDC")
+            {
+                return baseAsset + "USDT";
+            }
+
+            return baseAsset + quoteAsset;
+        }
+
+        return normalized;
+    }
 }
 
 internal sealed record PositionState(

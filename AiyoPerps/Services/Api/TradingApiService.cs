@@ -49,9 +49,11 @@ public sealed class TradingApiService : IAsyncDisposable
             request.DisplayName,
             request.Environment,
             request.Summary,
+            request.AuthMode ?? "Both",
             request.ApiKey,
             request.ApiSecret,
             request.AccountAddress,
+            request.SubAccountId,
             request.WalletAddress,
             request.PrivateKey);
 
@@ -83,9 +85,11 @@ public sealed class TradingApiService : IAsyncDisposable
             request.DisplayName,
             request.Environment,
             request.Summary,
+            request.AuthMode,
             request.ApiKey,
             request.ApiSecret,
             request.AccountAddress,
+            request.SubAccountId,
             request.WalletAddress,
             request.PrivateKey,
             request.IsEnabled ?? existing.IsEnabled);
@@ -559,6 +563,8 @@ public sealed class TradingApiService : IAsyncDisposable
             account.DisplayName,
             account.Environment,
             account.Summary,
+            account.AuthMode,
+            account.SubAccountId,
             account.IsEnabled,
             account.HasApiCredentials,
             account.HasWalletCredentials);
@@ -624,6 +630,29 @@ public sealed class TradingApiService : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(request.Summary))
         {
             throw new ApiBadRequestException("summary is required.");
+        }
+
+        var mode = (request.AuthMode ?? "Both").Trim();
+        if (!mode.Equals("ApiKey", StringComparison.OrdinalIgnoreCase) &&
+            !mode.Equals("Wallet", StringComparison.OrdinalIgnoreCase) &&
+            !mode.Equals("Both", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ApiBadRequestException("authMode must be one of: ApiKey, Wallet, Both.");
+        }
+
+        var requiresApi = mode.Equals("ApiKey", StringComparison.OrdinalIgnoreCase) ||
+                          mode.Equals("Both", StringComparison.OrdinalIgnoreCase);
+        var requiresWallet = mode.Equals("Wallet", StringComparison.OrdinalIgnoreCase) ||
+                             mode.Equals("Both", StringComparison.OrdinalIgnoreCase);
+
+        if (requiresApi && (string.IsNullOrWhiteSpace(request.ApiKey) || string.IsNullOrWhiteSpace(request.ApiSecret)))
+        {
+            throw new ApiBadRequestException("apiKey and apiSecret are required by authMode.");
+        }
+
+        if (requiresWallet && (string.IsNullOrWhiteSpace(request.WalletAddress) || string.IsNullOrWhiteSpace(request.PrivateKey)))
+        {
+            throw new ApiBadRequestException("walletAddress and privateKey are required by authMode.");
         }
     }
 }

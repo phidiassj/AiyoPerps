@@ -8,8 +8,10 @@ public sealed class AccountCredentials
     public string? ApiKey { get; init; }
     public string? ApiSecret { get; init; }
     public string? AccountAddress { get; init; }
+    public string? SubAccountId { get; init; }
     public string? WalletAddress { get; init; }
     public string? PrivateKey { get; init; }
+    public string AuthMode { get; init; } = "Both";
 
     public bool HasApiCredentials =>
         !string.IsNullOrWhiteSpace(ApiKey) &&

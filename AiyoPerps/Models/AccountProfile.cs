@@ -9,6 +9,8 @@ public sealed class AccountProfile
     public required string DisplayName { get; set; }
     public required string Environment { get; set; }
     public required string Summary { get; set; }
+    public string AuthMode { get; set; } = "Both";
+    public string? SubAccountId { get; set; }
     public bool IsEnabled { get; set; } = true;
     public bool HasApiCredentials { get; set; }
     public bool HasWalletCredentials { get; set; }

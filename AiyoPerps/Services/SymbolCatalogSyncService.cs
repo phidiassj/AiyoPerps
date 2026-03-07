@@ -28,6 +28,10 @@ public sealed class SymbolCatalogSyncService
         await SyncBitMexAsync("testnet", cancellationToken);
         await SyncHyperliquidAsync("mainnet", cancellationToken);
         await SyncHyperliquidAsync("testnet", cancellationToken);
+        await SyncAsterAsync("mainnet", cancellationToken);
+        await SyncAsterAsync("testnet", cancellationToken);
+        await SyncGrvtAsync("mainnet", cancellationToken);
+        await SyncGrvtAsync("testnet", cancellationToken);
     }
 
     public async Task SyncBitMexAsync(string environment, CancellationToken cancellationToken = default)
@@ -174,6 +178,154 @@ public sealed class SymbolCatalogSyncService
         }
     }
 
+    public async Task SyncAsterAsync(string environment, CancellationToken cancellationToken = default)
+    {
+        var baseUrl = string.Equals(environment, "testnet", StringComparison.OrdinalIgnoreCase)
+            ? "https://fapi.asterdex-testnet.com"
+            : "https://fapi.asterdex.com";
+        var url = $"{baseUrl}/fapi/v3/exchangeInfo";
+
+        try
+        {
+            _logger.Info("SymbolSync", $"Aster sync start env={environment}, url={url}");
+            using var resp = await _http.GetAsync(url, cancellationToken);
+            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.Error("SymbolSync", $"Aster sync failed env={environment}, status={(int)resp.StatusCode}, body={Trim(body)}");
+                return;
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("symbols", out var symbolsNode) || symbolsNode.ValueKind != JsonValueKind.Array)
+            {
+                _logger.Warn("SymbolSync", $"Aster sync unexpected payload env={environment}");
+                return;
+            }
+
+            var symbols = new List<string>();
+            var skippedStatus = 0;
+            var skippedType = 0;
+            var skippedInvalid = 0;
+            foreach (var item in symbolsNode.EnumerateArray())
+            {
+                var symbol = ReadString(item, "symbol");
+                if (string.IsNullOrWhiteSpace(symbol) || !IsValidAsterSymbol(symbol))
+                {
+                    skippedInvalid++;
+                    continue;
+                }
+
+                var status = ReadString(item, "status");
+                if (!string.Equals(status, "TRADING", StringComparison.OrdinalIgnoreCase))
+                {
+                    skippedStatus++;
+                    continue;
+                }
+
+                var contractType = ReadString(item, "contractType");
+                if (!string.IsNullOrWhiteSpace(contractType) &&
+                    !string.Equals(contractType, "PERPETUAL", StringComparison.OrdinalIgnoreCase))
+                {
+                    skippedType++;
+                    continue;
+                }
+
+                symbols.Add(symbol);
+            }
+
+            var result = _repository.ReplaceSymbols("Aster", environment, symbols);
+            _logger.Info("SymbolSync", $"Aster sync done env={environment}, total={result.Total}, added={result.Added}, removed={result.Removed}, skippedStatus={skippedStatus}, skippedType={skippedType}, skippedInvalid={skippedInvalid}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("SymbolSync", $"Aster sync exception env={environment}", ex);
+        }
+    }
+
+    public async Task SyncGrvtAsync(string environment, CancellationToken cancellationToken = default)
+    {
+        var baseUrl = string.Equals(environment, "testnet", StringComparison.OrdinalIgnoreCase)
+            ? "https://market-data.testnet.grvt.io"
+            : "https://market-data.grvt.io";
+        var url = $"{baseUrl}/full/v1/all_instruments";
+
+        try
+        {
+            _logger.Info("SymbolSync", $"GRVT sync start env={environment}, url={url}");
+            using var req = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent("{\"is_active\":true}", Encoding.UTF8, "application/json")
+            };
+
+            using var resp = await _http.SendAsync(req, cancellationToken);
+            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.Error("SymbolSync", $"GRVT sync failed env={environment}, status={(int)resp.StatusCode}, body={Trim(body)}");
+                return;
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("result", out var result))
+            {
+                root = result;
+            }
+
+            JsonElement list;
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                list = root;
+            }
+            else if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("instruments", out var instruments) && instruments.ValueKind == JsonValueKind.Array)
+            {
+                list = instruments;
+            }
+            else if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array)
+            {
+                list = items;
+            }
+            else
+            {
+                _logger.Warn("SymbolSync", $"GRVT sync unexpected payload env={environment}");
+                return;
+            }
+
+            var symbols = new List<string>();
+            var skippedInvalid = 0;
+            var skippedInactive = 0;
+            foreach (var item in list.EnumerateArray())
+            {
+                var symbol = (ReadString(item, "instrument") ?? ReadString(item, "symbol") ?? string.Empty).ToUpperInvariant();
+                if (string.IsNullOrWhiteSpace(symbol) || !IsValidGrvtSymbol(symbol))
+                {
+                    skippedInvalid++;
+                    continue;
+                }
+
+                var active = ReadString(item, "status");
+                if (!string.IsNullOrWhiteSpace(active) &&
+                    !active.Equals("TRADING", StringComparison.OrdinalIgnoreCase) &&
+                    !active.Equals("ACTIVE", StringComparison.OrdinalIgnoreCase))
+                {
+                    skippedInactive++;
+                    continue;
+                }
+
+                symbols.Add(symbol);
+            }
+
+            var unique = symbols.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var replace = _repository.ReplaceSymbols("GRVT", environment, unique);
+            _logger.Info("SymbolSync", $"GRVT sync done env={environment}, total={replace.Total}, added={replace.Added}, removed={replace.Removed}, skippedInvalid={skippedInvalid}, skippedInactive={skippedInactive}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("SymbolSync", $"GRVT sync exception env={environment}", ex);
+        }
+    }
+
     private async Task<Dictionary<string, decimal>> FetchHyperliquidMidsAsync(string baseUrl, CancellationToken cancellationToken)
     {
         var url = $"{baseUrl}/info";
@@ -260,6 +412,38 @@ public sealed class SymbolCatalogSyncService
         }
 
         return s.All(ch => char.IsLetterOrDigit(ch));
+    }
+
+    private static bool IsValidAsterSymbol(string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol))
+        {
+            return false;
+        }
+
+        var s = symbol.Trim().ToUpperInvariant();
+        if (s.Length < 6 || s.Length > 32)
+        {
+            return false;
+        }
+
+        return s.All(ch => char.IsLetterOrDigit(ch));
+    }
+
+    private static bool IsValidGrvtSymbol(string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol))
+        {
+            return false;
+        }
+
+        var s = symbol.Trim().ToUpperInvariant();
+        if (s.Length < 6 || s.Length > 64)
+        {
+            return false;
+        }
+
+        return s.All(ch => char.IsLetterOrDigit(ch) || ch is '_' or '-');
     }
 
     private static string? ReadString(JsonElement obj, string name)

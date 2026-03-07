@@ -20,8 +20,8 @@ public sealed class AccountStore
         var existing = _repository.GetAll();
         if (existing.Count == 0)
         {
-            Add("BitMEX", "BitMEX Testnet", "testnet", "api_****_xxxx", null, null, null, null, null);
-            Add("Hyperliquid", "HL Wallet", "mainnet", "0x12ab...89ef", null, null, null, null, null);
+            Add("BitMEX", "BitMEX Testnet", "testnet", "api_****_xxxx", "ApiKey", null, null, null, null, null, null);
+            Add("Hyperliquid", "HL Wallet", "mainnet", "0x12ab...89ef", "Wallet", null, null, null, null, null, null);
         }
         else
         {
@@ -44,7 +44,7 @@ public sealed class AccountStore
         return _repository.GetById(accountId);
     }
 
-    public void Add(string venueId, string name, string environment, string summary, string? apiKey, string? apiSecret, string? accountAddress, string? walletAddress, string? privateKey)
+    public void Add(string venueId, string name, string environment, string summary, string authMode, string? apiKey, string? apiSecret, string? accountAddress, string? subAccountId, string? walletAddress, string? privateKey)
     {
         var account = new AccountProfile
         {
@@ -52,12 +52,14 @@ public sealed class AccountStore
             DisplayName = name,
             Environment = environment,
             Summary = summary,
+            AuthMode = authMode,
+            SubAccountId = string.IsNullOrWhiteSpace(subAccountId) ? null : subAccountId.Trim(),
             IsEnabled = true,
             HasApiCredentials = !string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret),
             HasWalletCredentials = !string.IsNullOrWhiteSpace(walletAddress) && !string.IsNullOrWhiteSpace(privateKey)
         };
 
-        _repository.Add(account, apiKey, apiSecret, accountAddress, walletAddress, privateKey);
+        _repository.Add(account, apiKey, apiSecret, accountAddress, subAccountId, walletAddress, privateKey);
         Reload();
     }
 
@@ -66,9 +68,9 @@ public sealed class AccountStore
         return _repository.GetCredentials(accountId);
     }
 
-    public void UpdateCredentials(AccountProfile account, string? apiKey, string? apiSecret, string? accountAddress, string? walletAddress, string? privateKey)
+    public void UpdateCredentials(AccountProfile account, string? apiKey, string? apiSecret, string? accountAddress, string? subAccountId, string? walletAddress, string? privateKey, string? authMode = null)
     {
-        _repository.UpdateCredentials(account.AccountId, apiKey, apiSecret, accountAddress, walletAddress, privateKey);
+        _repository.UpdateCredentials(account.AccountId, apiKey, apiSecret, accountAddress, subAccountId, walletAddress, privateKey, authMode);
         Reload();
     }
 
@@ -78,9 +80,11 @@ public sealed class AccountStore
         string displayName,
         string environment,
         string summary,
+        string? authMode,
         string? apiKey,
         string? apiSecret,
         string? accountAddress,
+        string? subAccountId,
         string? walletAddress,
         string? privateKey,
         bool isEnabled)
@@ -91,9 +95,11 @@ public sealed class AccountStore
             displayName,
             environment,
             summary,
+            authMode,
             apiKey,
             apiSecret,
             accountAddress,
+            subAccountId,
             walletAddress,
             privateKey,
             isEnabled);

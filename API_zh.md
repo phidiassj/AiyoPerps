@@ -53,7 +53,7 @@ Path 參數：
 ### `POST /api/v1/accounts`
 ### `PUT /api/v1/accounts/{accountId}`
 Body：`ApiAccountUpsertRequest`
-- `venueId`（`string`，必填）：`BitMEX` 或 `Hyperliquid`
+- `venueId`（`string`，必填）：`BitMEX`、`Hyperliquid` 或 `Aster`
 - `displayName`（`string`，必填）
 - `environment`（`string`，必填）：`mainnet` 或 `testnet`
 - `summary`（`string`，必填）
@@ -63,6 +63,15 @@ Body：`ApiAccountUpsertRequest`
 - `walletAddress`（`string`，可選）
 - `privateKey`（`string`，可選）
 - `isEnabled`（`boolean`，可選，更新時可用）
+
+### Aster 帳號說明
+- Aster 私有端點使用 V3 signer 驗證模型。
+- 針對 `Aster` 的已驗證操作，請填入：
+  - `accountAddress`：主帳戶錢包地址（`user`）
+  - `walletAddress`：API 錢包地址（`signer`）
+  - `privateKey`：API 錢包（`signer`）私鑰
+- 若未提供上述資料，Aster 仍可使用公開行情，但交易/帳務端點會失敗。
+- 本軟體會強制 Aster 使用單向持倉模式。若帳戶為雙向模式且無法切換為單向，則下單請求會被拒絕。
 
 ### `DELETE /api/v1/accounts/{accountId}`
 啟動非同步刪除作業。

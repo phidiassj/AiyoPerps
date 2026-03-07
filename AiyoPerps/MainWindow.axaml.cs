@@ -16,10 +16,20 @@ namespace AiyoPerps;
 public partial class MainWindow : Window
 {
     private readonly ObservableCollection<ToastMessage> _toasts = [];
+    private DockPanel? _mainContentHost;
+    private Border? _shutdownOverlay;
+    private TextBlock? _shutdownOverlayText;
+    private bool _allowImmediateClose;
+    private bool _isShuttingDown;
+    private Task<bool>? _shutdownTask;
 
     public MainWindow()
     {
         InitializeComponent();
+
+        _mainContentHost = this.FindControl<DockPanel>("MainContentHost");
+        _shutdownOverlay = this.FindControl<Border>("ShutdownOverlay");
+        _shutdownOverlayText = this.FindControl<TextBlock>("ShutdownOverlayText");
 
         var toastItems = this.FindControl<ItemsControl>("ToastItems");
         if (toastItems is not null)
@@ -30,6 +40,115 @@ public partial class MainWindow : Window
     }
 
     private MainWindowViewModel? Vm => DataContext as MainWindowViewModel;
+
+    public Task<bool> BeginShutdownAsync(string reason)
+    {
+        _shutdownTask ??= BeginShutdownCoreAsync(reason);
+        return _shutdownTask;
+    }
+
+    private async Task<bool> BeginShutdownCoreAsync(string reason)
+    {
+        if (_isShuttingDown)
+        {
+            return await (_shutdownTask ?? Task.FromResult(true));
+        }
+
+        _isShuttingDown = true;
+        App.Logger.Info("MainWindow", $"Shutdown sequence started. reason={reason}");
+        ShowShutdownOverlay();
+        HideOtherWindows();
+
+        try
+        {
+            if (Vm is not null)
+            {
+                await Vm.DisposeAsync();
+            }
+
+            var completedInTime = await App.RunShutdownCleanupAsync();
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                _allowImmediateClose = true;
+                if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+                {
+                    desktop.Shutdown();
+                }
+                else
+                {
+                    Close();
+                }
+            });
+
+            return completedInTime;
+        }
+        catch (Exception ex)
+        {
+            App.Logger.Error("MainWindow", "Shutdown sequence failed", ex);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                _allowImmediateClose = true;
+                Close();
+            });
+            return false;
+        }
+    }
+
+    private void ShowShutdownOverlay()
+    {
+        if (_mainContentHost is not null)
+        {
+            _mainContentHost.IsEnabled = false;
+            _mainContentHost.Opacity = 0.28;
+        }
+
+        if (_shutdownOverlayText is not null)
+        {
+            _shutdownOverlayText.Text = string.Equals(App.Localization.CurrentLanguageCode, "en", StringComparison.OrdinalIgnoreCase)
+                ? "Shutting down..."
+                : "正在關閉中...";
+        }
+
+        if (_shutdownOverlay is not null)
+        {
+            _shutdownOverlay.IsVisible = true;
+        }
+    }
+
+    private void HideOtherWindows()
+    {
+        if (Application.Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            return;
+        }
+
+        foreach (var window in desktop.Windows.Where(x => x != this))
+        {
+            try
+            {
+                window.IsEnabled = false;
+                window.Hide();
+            }
+            catch (Exception ex)
+            {
+                App.Logger.Warn("MainWindow", $"Secondary window hide warning: {ex.Message}");
+            }
+        }
+    }
+
+    protected override void OnClosing(WindowClosingEventArgs e)
+    {
+        if (_allowImmediateClose)
+        {
+            base.OnClosing(e);
+            return;
+        }
+
+        e.Cancel = true;
+        _ = BeginShutdownAsync("Main window close requested");
+        base.OnClosing(e);
+    }
 
     private async void OnCloseTabClick(object? sender, RoutedEventArgs e)
     {
@@ -160,28 +279,28 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         App.ToastService.ToastRaised -= OnToastRaised;
-        if (DataContext is IDisposable disposable)
+        if (!_isShuttingDown && DataContext is IDisposable disposable)
         {
             disposable.Dispose();
         }
 
         base.OnClosed(e);
-
-        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-        {
-            // Ensure process exits when the last window is closed, even if background services were running.
-            if (desktop.Windows.Count <= 1)
-            {
-                App.Logger.Info("MainWindow", "Last window closed, forcing desktop shutdown.");
-                desktop.Shutdown();
-            }
-        }
     }
 
     private void OnToastRaised(ToastMessage toast)
     {
+        if (_isShuttingDown)
+        {
+            return;
+        }
+
         Dispatcher.UIThread.Post(async () =>
         {
+            if (_isShuttingDown)
+            {
+                return;
+            }
+
             _toasts.Add(toast);
             await Task.Delay(5000);
             _toasts.Remove(toast);

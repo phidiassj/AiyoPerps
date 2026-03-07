@@ -7,10 +7,20 @@ With AiyoPerps, you can trade crypto perpetual futures **manually**, **with AI c
 
 ![Software interface](./images/main-en-01.jpg)
 
+## Support Us
+If you think this project is cool, feel free to [**buy us a coffee**](https://utunote.com/AiyoPerps/donate)!<br>
+**When you sponsor us, you’ll also get a chance to join Taiwan’s receipt lottery.**<br>
+That’s because [Chen-Si Studio](https://utunote.com) is a team that pays taxes properly. We issue an official receipt/invoice for every bit of income, and those invoice numbers can be checked for prizes every two months.<br>
+Even if you don’t live in Taiwan, if your invoice wins, just let us know. We’ll claim the prize for you and then send you the money (after deducting any necessary handling fees).
+
+## 0. Supported trading platform
+- CEX: [BitMEX](https://www.bitmex.com/)
+- DEX: [Hyperliquid](https://app.hyperliquid.xyz/)、[Aster](https://www.asterdex.com/)、[Grvt](https://grvt.io/)
+
 ## 1. Requirements
 - Windows, Linux, or macOS (via Docker).
 - .NET 10 Runtime (included in release builds).
-- A perpetual futures exchange account. Current supported venues are `Hyperliquid` and `BitMEX`, with more to be added later.
+- A perpetual futures exchange account. Current supported venues are `Hyperliquid`, `BitMEX`, and `Aster`.
 
 ## 2. Run the Desktop App
 ### Use a release build

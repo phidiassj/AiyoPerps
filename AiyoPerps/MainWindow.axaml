@@ -1,4 +1,4 @@
-﻿<Window xmlns="https://github.com/avaloniaui"
+<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -16,7 +16,7 @@
         Icon="avares://AiyoPerps/Assets/logo.ico"
         Title="AiyoPerps">
   <Grid>
-  <DockPanel Margin="14">
+  <DockPanel x:Name="MainContentHost" Margin="14">
     <Border DockPanel.Dock="Top" Padding="0,0,0,12">
       <StackPanel Orientation="Horizontal" Spacing="10" Background="#0F0F0F">
         <Button Content="{Binding L[Main_AddTab]}" Command="{Binding AddTabCommand}" Classes="cta" />
@@ -88,7 +88,18 @@
                 <ComboBox Width="180"
                           ItemsSource="{Binding SymbolOptions}"
                           SelectedItem="{Binding SelectedSymbolOption, Mode=TwoWay}"
-                          IsEnabled="{Binding CanEditMarketSessionSettings}" />
+                          IsEnabled="{Binding CanEditMarketSessionSettings}">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:SymbolOptionItem">
+                      <TextBlock Text="{Binding Display}" />
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                  <ComboBox.SelectionBoxItemTemplate>
+                    <DataTemplate x:DataType="vm:SymbolOptionItem">
+                      <TextBlock Text="{Binding Display}" />
+                    </DataTemplate>
+                  </ComboBox.SelectionBoxItemTemplate>
+                </ComboBox>
                 <TextBlock Text="{Binding L[Main_Interval]}" VerticalAlignment="Center" Classes="label" />
                 <ComboBox Width="120"
                           ItemsSource="{Binding Intervals}"
@@ -320,7 +331,7 @@
                                 <DataTemplate x:DataType="vm:PositionPanelRow">
                                   <Border Background="#0E212C" BorderBrush="#26414C" BorderThickness="1" CornerRadius="8" Padding="10">
                                     <StackPanel Spacing="4">
-                                      <TextBlock Text="{Binding Symbol}" FontWeight="Bold" Foreground="#D9F0F5" />
+                                      <TextBlock Text="{Binding DisplaySymbol}" FontWeight="Bold" Foreground="#D9F0F5" />
                                       <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                                         <TextBlock Grid.Column="0" Text="{Binding DataContext.L[OrderPanel_Amount], RelativeSource={RelativeSource AncestorType=TabControl}}" Classes="label" />
                                         <TextBlock Grid.Column="1" Text="{Binding ContractAmount}" HorizontalAlignment="Left" />
@@ -391,7 +402,7 @@
                                 <DataTemplate x:DataType="vm:PendingOrderPanelRow">
                                   <Border Background="#0E212C" BorderBrush="#26414C" BorderThickness="1" CornerRadius="8" Padding="10">
                                     <StackPanel Spacing="4">
-                                      <TextBlock Text="{Binding Symbol}" FontWeight="Bold" Foreground="#D9F0F5" />
+                                      <TextBlock Text="{Binding DisplaySymbol}" FontWeight="Bold" Foreground="#D9F0F5" />
                                       <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                                         <TextBlock Grid.Column="0" Text="{Binding DataContext.L[OrderPanel_Amount], RelativeSource={RelativeSource AncestorType=TabControl}}" Classes="label" />
                                         <TextBlock Grid.Column="1" Text="{Binding ContractAmount}" HorizontalAlignment="Left" />
@@ -513,3 +524,4 @@
     </ItemsControl>
   </Grid>
 </Window>
+

@@ -29,6 +29,8 @@ public sealed class AccountRepository(ISecretProtector protector)
                 DisplayName = x.DisplayName,
                 Environment = x.Environment,
                 Summary = x.Summary,
+                AuthMode = NormalizeAuthMode(x.AuthMode, x.ApiKeyEncrypted, x.ApiSecretEncrypted, x.WalletAddress, x.PrivateKeyEncrypted),
+                SubAccountId = NormalizeOrNull(x.SubAccountId),
                 IsEnabled = x.IsEnabled,
                 HasApiCredentials = !string.IsNullOrWhiteSpace(x.ApiKeyEncrypted) && !string.IsNullOrWhiteSpace(x.ApiSecretEncrypted),
                 HasWalletCredentials = !string.IsNullOrWhiteSpace(x.WalletAddress) && !string.IsNullOrWhiteSpace(x.PrivateKeyEncrypted)
@@ -52,13 +54,15 @@ public sealed class AccountRepository(ISecretProtector protector)
             DisplayName = entity.DisplayName,
             Environment = entity.Environment,
             Summary = entity.Summary,
+            AuthMode = NormalizeAuthMode(entity.AuthMode, entity.ApiKeyEncrypted, entity.ApiSecretEncrypted, entity.WalletAddress, entity.PrivateKeyEncrypted),
+            SubAccountId = NormalizeOrNull(entity.SubAccountId),
             IsEnabled = entity.IsEnabled,
             HasApiCredentials = !string.IsNullOrWhiteSpace(entity.ApiKeyEncrypted) && !string.IsNullOrWhiteSpace(entity.ApiSecretEncrypted),
             HasWalletCredentials = !string.IsNullOrWhiteSpace(entity.WalletAddress) && !string.IsNullOrWhiteSpace(entity.PrivateKeyEncrypted)
         };
     }
 
-    public void Add(AccountProfile account, string? apiKey, string? apiSecret, string? accountAddress, string? walletAddress, string? privateKey)
+    public void Add(AccountProfile account, string? apiKey, string? apiSecret, string? accountAddress, string? subAccountId, string? walletAddress, string? privateKey)
     {
         using var db = new AppDbContext();
         var entity = new AccountEntity
@@ -68,11 +72,13 @@ public sealed class AccountRepository(ISecretProtector protector)
             DisplayName = account.DisplayName,
             Environment = account.Environment,
             Summary = account.Summary,
+            AuthMode = NormalizeAuthMode(account.AuthMode, apiKey, apiSecret, walletAddress, privateKey),
             IsEnabled = account.IsEnabled,
             CreatedAt = DateTimeOffset.UtcNow,
             ApiKeyEncrypted = EncryptOrNull(apiKey),
             ApiSecretEncrypted = EncryptOrNull(apiSecret),
             AccountAddress = NormalizeOrNull(accountAddress),
+            SubAccountId = NormalizeOrNull(subAccountId),
             WalletAddress = NormalizeOrNull(walletAddress),
             PrivateKeyEncrypted = EncryptOrNull(privateKey)
         };
@@ -92,8 +98,10 @@ public sealed class AccountRepository(ISecretProtector protector)
             ApiKey = DecryptOrNull(entity.ApiKeyEncrypted),
             ApiSecret = DecryptOrNull(entity.ApiSecretEncrypted),
             AccountAddress = NormalizeOrNull(entity.AccountAddress),
+            SubAccountId = NormalizeOrNull(entity.SubAccountId),
             WalletAddress = NormalizeOrNull(entity.WalletAddress),
-            PrivateKey = DecryptOrNull(entity.PrivateKeyEncrypted)
+            PrivateKey = DecryptOrNull(entity.PrivateKeyEncrypted),
+            AuthMode = NormalizeAuthMode(entity.AuthMode, entity.ApiKeyEncrypted, entity.ApiSecretEncrypted, entity.WalletAddress, entity.PrivateKeyEncrypted)
         };
     }
 
@@ -105,15 +113,17 @@ public sealed class AccountRepository(ISecretProtector protector)
         db.SaveChanges();
     }
 
-    public void UpdateCredentials(Guid accountId, string? apiKey, string? apiSecret, string? accountAddress, string? walletAddress, string? privateKey)
+    public void UpdateCredentials(Guid accountId, string? apiKey, string? apiSecret, string? accountAddress, string? subAccountId, string? walletAddress, string? privateKey, string? authMode = null)
     {
         using var db = new AppDbContext();
         var entity = db.Accounts.Single(x => x.AccountId == accountId);
         entity.ApiKeyEncrypted = EncryptOrNull(apiKey);
         entity.ApiSecretEncrypted = EncryptOrNull(apiSecret);
         entity.AccountAddress = NormalizeOrNull(accountAddress);
+        entity.SubAccountId = NormalizeOrNull(subAccountId);
         entity.WalletAddress = NormalizeOrNull(walletAddress);
         entity.PrivateKeyEncrypted = EncryptOrNull(privateKey);
+        entity.AuthMode = NormalizeAuthMode(authMode, apiKey, apiSecret, walletAddress, privateKey);
         entity.LastTestedAt = DateTimeOffset.UtcNow;
         db.SaveChanges();
     }
@@ -124,9 +134,11 @@ public sealed class AccountRepository(ISecretProtector protector)
         string displayName,
         string environment,
         string summary,
+        string? authMode,
         string? apiKey,
         string? apiSecret,
         string? accountAddress,
+        string? subAccountId,
         string? walletAddress,
         string? privateKey,
         bool isEnabled)
@@ -137,10 +149,12 @@ public sealed class AccountRepository(ISecretProtector protector)
         entity.DisplayName = displayName.Trim();
         entity.Environment = environment.Trim();
         entity.Summary = summary.Trim();
+        entity.AuthMode = NormalizeAuthMode(authMode, apiKey, apiSecret, walletAddress, privateKey);
         entity.IsEnabled = isEnabled;
         entity.ApiKeyEncrypted = EncryptOrNull(apiKey);
         entity.ApiSecretEncrypted = EncryptOrNull(apiSecret);
         entity.AccountAddress = NormalizeOrNull(accountAddress);
+        entity.SubAccountId = NormalizeOrNull(subAccountId);
         entity.WalletAddress = NormalizeOrNull(walletAddress);
         entity.PrivateKeyEncrypted = EncryptOrNull(privateKey);
         entity.LastTestedAt = DateTimeOffset.UtcNow;
@@ -178,5 +192,28 @@ public sealed class AccountRepository(ISecretProtector protector)
     private static string? NormalizeOrNull(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static string NormalizeAuthMode(string? authMode, string? apiKey, string? apiSecret, string? walletAddress, string? privateKey)
+    {
+        var value = (authMode ?? string.Empty).Trim();
+        if (value.Equals("ApiKey", StringComparison.OrdinalIgnoreCase))
+        {
+            return "ApiKey";
+        }
+
+        if (value.Equals("Wallet", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Wallet";
+        }
+
+        if (value.Equals("Both", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Both";
+        }
+
+        var hasApi = !string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret);
+        var hasWallet = !string.IsNullOrWhiteSpace(walletAddress) && !string.IsNullOrWhiteSpace(privateKey);
+        return hasApi && hasWallet ? "Both" : hasApi ? "ApiKey" : hasWallet ? "Wallet" : "Both";
     }
 }

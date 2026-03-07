@@ -53,7 +53,7 @@ Path params:
 ### `POST /api/v1/accounts`
 ### `PUT /api/v1/accounts/{accountId}`
 Body: `ApiAccountUpsertRequest`
-- `venueId` (`string`, required): `BitMEX` or `Hyperliquid`
+- `venueId` (`string`, required): `BitMEX`, `Hyperliquid`, or `Aster`
 - `displayName` (`string`, required)
 - `environment` (`string`, required): `mainnet` or `testnet`
 - `summary` (`string`, required)
@@ -63,6 +63,15 @@ Body: `ApiAccountUpsertRequest`
 - `walletAddress` (`string`, optional)
 - `privateKey` (`string`, optional)
 - `isEnabled` (`boolean`, optional, update only)
+
+### Aster account notes
+- Aster private endpoints use the V3 signer model.
+- For authenticated operations on `Aster`, set:
+  - `accountAddress`: main account wallet address (`user`)
+  - `walletAddress`: API wallet address (`signer`)
+  - `privateKey`: private key of the API wallet (`signer`)
+- If these are missing, Aster can still use public market data but trading/account-state endpoints will fail.
+- The app enforces one-way position mode for Aster trading. If your account is in hedge mode and cannot switch to one-way mode, order requests are rejected.
 
 ### `DELETE /api/v1/accounts/{accountId}`
 Starts an async delete operation.

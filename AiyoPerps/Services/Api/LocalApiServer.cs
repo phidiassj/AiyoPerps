@@ -636,13 +636,15 @@ public sealed class LocalApiServer : IAsyncDisposable
             Tool("accounts_create", "Create a new account profile with credentials.", ObjectSchema(
                 new Dictionary<string, object?>
                 {
-                    ["venueId"] = StringSchema("Venue name, for example BitMEX or Hyperliquid.", allowedValues: ["BitMEX", "Hyperliquid"]),
+                    ["venueId"] = StringSchema("Venue name, for example BitMEX, Hyperliquid, Aster, or GRVT.", allowedValues: ["BitMEX", "Hyperliquid", "Aster", "GRVT"]),
                     ["displayName"] = StringSchema("User-facing account display name."),
                     ["environment"] = StringSchema("Environment name, for example mainnet or testnet.", allowedValues: ["mainnet", "testnet"]),
                     ["summary"] = StringSchema("Short summary shown in the UI."),
+                    ["authMode"] = StringSchema("Authentication mode.", allowedValues: ["ApiKey", "Wallet", "Both"]),
                     ["apiKey"] = StringSchema("Optional API key."),
                     ["apiSecret"] = StringSchema("Optional API secret."),
                     ["accountAddress"] = StringSchema("Optional public account address."),
+                    ["subAccountId"] = StringSchema("Optional sub account identifier (required by some venues such as GRVT)."),
                     ["walletAddress"] = StringSchema("Optional wallet address."),
                     ["privateKey"] = StringSchema("Optional private key."),
                     ["isEnabled"] = BooleanSchema("Whether the account is enabled.")
@@ -652,13 +654,15 @@ public sealed class LocalApiServer : IAsyncDisposable
                 new Dictionary<string, object?>
                 {
                     ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
-                    ["venueId"] = StringSchema("Venue name, for example BitMEX or Hyperliquid.", allowedValues: ["BitMEX", "Hyperliquid"]),
+                    ["venueId"] = StringSchema("Venue name, for example BitMEX, Hyperliquid, Aster, or GRVT.", allowedValues: ["BitMEX", "Hyperliquid", "Aster", "GRVT"]),
                     ["displayName"] = StringSchema("User-facing account display name."),
                     ["environment"] = StringSchema("Environment name, for example mainnet or testnet.", allowedValues: ["mainnet", "testnet"]),
                     ["summary"] = StringSchema("Short summary shown in the UI."),
+                    ["authMode"] = StringSchema("Authentication mode.", allowedValues: ["ApiKey", "Wallet", "Both"]),
                     ["apiKey"] = StringSchema("Optional API key."),
                     ["apiSecret"] = StringSchema("Optional API secret."),
                     ["accountAddress"] = StringSchema("Optional public account address."),
+                    ["subAccountId"] = StringSchema("Optional sub account identifier (required by some venues such as GRVT)."),
                     ["walletAddress"] = StringSchema("Optional wallet address."),
                     ["privateKey"] = StringSchema("Optional private key."),
                     ["isEnabled"] = BooleanSchema("Whether the account is enabled.")
