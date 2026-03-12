@@ -1,6 +1,7 @@
 .git
 .vs
 .sonarqube
+AiyoPerps.Test
 **/bin
 **/obj
 publish

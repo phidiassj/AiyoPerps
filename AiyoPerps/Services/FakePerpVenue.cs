@@ -26,9 +26,9 @@ public class FakePerpVenue(string venueId) : IPerpVenue
         return Task.CompletedTask;
     }
 
-    public Task<(bool IsSuccess, string Message)> ConfigureLeverageAsync(string symbol, decimal leverage, CancellationToken cancellationToken = default)
+    public Task<(bool IsSuccess, string Message)> ConfigureLeverageAsync(string symbol, decimal leverage, MarginMode marginMode, CancellationToken cancellationToken = default)
     {
-        return Task.FromResult((true, $"{VenueId} simulated leverage set to {leverage}x"));
+        return Task.FromResult((true, $"{VenueId} simulated {marginMode.ToApiValue()} leverage set to {leverage}x"));
     }
 
     public Task<OrderAck> PlaceOrderAsync(string symbol, string side, decimal qty, decimal? price, CancellationToken cancellationToken = default)

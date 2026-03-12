@@ -1,0 +1,10 @@
+{
+  "name": "aiyoperps-dydx-helper",
+  "private": true,
+  "version": "1.0.0",
+  "type": "commonjs",
+  "dependencies": {
+    "@dydxprotocol/v4-client-js": "3.6.0",
+    "long": "4.0.0"
+  }
+}

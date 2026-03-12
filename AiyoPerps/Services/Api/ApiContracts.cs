@@ -92,7 +92,8 @@ public sealed record ApiOpenPositionRequest(
     decimal Leverage,
     decimal Amount,
     string AmountUnit,
-    decimal? LimitPrice);
+    decimal? LimitPrice,
+    string? MarginMode);
 
 public sealed record ApiClosePositionRequest(
     Guid AccountId,
@@ -112,7 +113,8 @@ public sealed record ApiPositionDto(
     decimal MarkPrice,
     decimal UnrealizedPnlPct,
     decimal UnrealizedPnlUsd,
-    decimal RealizedPnlUsd);
+    decimal RealizedPnlUsd,
+    string MarginMode = "unknown");
 
 public sealed record ApiOpenOrderDto(
     string Symbol,
@@ -120,7 +122,8 @@ public sealed record ApiOpenOrderDto(
     decimal Leverage,
     decimal? LimitPrice,
     string Status,
-    string? OrderId);
+    string? OrderId,
+    string MarginMode = "unknown");
 
 public sealed record ApiBalanceDto(string Asset, decimal Quantity, decimal UsdValue);
 

@@ -53,7 +53,7 @@ Path 參數：
 ### `POST /api/v1/accounts`
 ### `PUT /api/v1/accounts/{accountId}`
 Body：`ApiAccountUpsertRequest`
-- `venueId`（`string`，必填）：`BitMEX`、`Hyperliquid` 或 `Aster`
+- `venueId`（`string`，必填）：`BitMEX`、`Hyperliquid`、`Aster`、`GRVT` 或 `dYdX`
 - `displayName`（`string`，必填）
 - `environment`（`string`，必填）：`mainnet` 或 `testnet`
 - `summary`（`string`，必填）

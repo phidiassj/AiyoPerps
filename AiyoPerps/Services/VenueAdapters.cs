@@ -22,6 +22,7 @@ public sealed class VenueFactory(AppLogger logger) : IVenueFactory
             "Hyperliquid" => new HyperliquidVenueAdapter(account.Environment, credentials, _logger),
             "Aster" => new AsterVenueAdapter(account.Environment, credentials, _logger),
             "GRVT" => new GrvtVenueAdapter(account.Environment, credentials, _logger),
+            "dYdX" => new DydxVenueAdapter(account.Environment, credentials, _logger),
             _ => new FakePerpVenue(account.VenueId)
         };
     }

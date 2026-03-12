@@ -32,6 +32,8 @@ public sealed class SymbolCatalogSyncService
         await SyncAsterAsync("testnet", cancellationToken);
         await SyncGrvtAsync("mainnet", cancellationToken);
         await SyncGrvtAsync("testnet", cancellationToken);
+        await SyncDydxAsync("mainnet", cancellationToken);
+        await SyncDydxAsync("testnet", cancellationToken);
     }
 
     public async Task SyncBitMexAsync(string environment, CancellationToken cancellationToken = default)
@@ -326,6 +328,71 @@ public sealed class SymbolCatalogSyncService
         }
     }
 
+    public async Task SyncDydxAsync(string environment, CancellationToken cancellationToken = default)
+    {
+        var baseUrl = string.Equals(environment, "testnet", StringComparison.OrdinalIgnoreCase)
+            ? "https://indexer.v4testnet.dydx.exchange"
+            : "https://indexer.dydx.trade";
+        var url = $"{baseUrl}/v4/perpetualMarkets";
+
+        try
+        {
+            _logger.Info("SymbolSync", $"dYdX sync start env={environment}, url={url}");
+            using var resp = await _http.GetAsync(url, cancellationToken);
+            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.Error("SymbolSync", $"dYdX sync failed env={environment}, status={(int)resp.StatusCode}, body={Trim(body)}");
+                return;
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("markets", out var marketsNode) || marketsNode.ValueKind != JsonValueKind.Object)
+            {
+                _logger.Warn("SymbolSync", $"dYdX sync unexpected payload env={environment}");
+                return;
+            }
+
+            var symbols = new List<string>();
+            var skippedInactive = 0;
+            var skippedIsolated = 0;
+            var skippedInvalid = 0;
+
+            foreach (var market in marketsNode.EnumerateObject())
+            {
+                var ticker = market.Name?.Trim().ToUpperInvariant() ?? string.Empty;
+                if (!IsValidDydxSymbol(ticker))
+                {
+                    skippedInvalid++;
+                    continue;
+                }
+
+                var status = ReadString(market.Value, "status");
+                if (!string.Equals(status, "ACTIVE", StringComparison.OrdinalIgnoreCase))
+                {
+                    skippedInactive++;
+                    continue;
+                }
+
+                var marketType = ReadString(market.Value, "marketType");
+                if (!string.Equals(marketType, "CROSS", StringComparison.OrdinalIgnoreCase))
+                {
+                    skippedIsolated++;
+                    continue;
+                }
+
+                symbols.Add(ticker);
+            }
+
+            var result = _repository.ReplaceSymbols("dYdX", environment, symbols);
+            _logger.Info("SymbolSync", $"dYdX sync done env={environment}, total={result.Total}, added={result.Added}, removed={result.Removed}, skippedInactive={skippedInactive}, skippedIsolated={skippedIsolated}, skippedInvalid={skippedInvalid}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("SymbolSync", $"dYdX sync exception env={environment}", ex);
+        }
+    }
+
     private async Task<Dictionary<string, decimal>> FetchHyperliquidMidsAsync(string baseUrl, CancellationToken cancellationToken)
     {
         var url = $"{baseUrl}/info";
@@ -444,6 +511,22 @@ public sealed class SymbolCatalogSyncService
         }
 
         return s.All(ch => char.IsLetterOrDigit(ch) || ch is '_' or '-');
+    }
+
+    private static bool IsValidDydxSymbol(string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol))
+        {
+            return false;
+        }
+
+        var s = symbol.Trim().ToUpperInvariant();
+        if (s.Length < 5 || s.Length > 96)
+        {
+            return false;
+        }
+
+        return s.All(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or ',' or '.');
     }
 
     private static string? ReadString(JsonElement obj, string name)

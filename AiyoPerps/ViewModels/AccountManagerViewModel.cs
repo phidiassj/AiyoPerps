@@ -319,7 +319,7 @@ public sealed class AccountManagerViewModel : ViewModelBase, IDisposable
         }
     }
 
-    public string[] VenueOptions { get; } = ["BitMEX", "Hyperliquid", "Aster", "GRVT"];
+    public string[] VenueOptions { get; } = ["BitMEX", "Hyperliquid", "Aster", "GRVT", "dYdX"];
     public string[] EnvironmentOptions { get; } = ["testnet", "mainnet"];
     public bool CanEditAuthMode => AuthModeOptions.Count > 1;
     public bool IsApiAuthSelected => SupportsApiCredentials(NewVenueId) &&
@@ -337,6 +337,7 @@ public sealed class AccountManagerViewModel : ViewModelBase, IDisposable
         "Hyperliquid" => L["AccountManager_VenueCapability_Hyperliquid"],
         "Aster" => L["AccountManager_VenueCapability_Aster"],
         "GRVT" => L["AccountManager_VenueCapability_GRVT"],
+        "dYdX" => L["AccountManager_VenueCapability_dYdX"],
         _ => string.Empty
     };
     public string FormStatusMessage => IsCreateMode ? L["AccountManager_TestAvailableAfterSave"] : TestConnectionResult;
@@ -560,6 +561,7 @@ public sealed class AccountManagerViewModel : ViewModelBase, IDisposable
             "Hyperliquid" => ["Wallet"],
             "Aster" => ["Wallet"],
             "GRVT" => ["ApiKey", "Wallet", "Both"],
+            "dYdX" => ["Wallet"],
             _ => ["ApiKey", "Wallet", "Both"]
         };
     }
@@ -577,7 +579,8 @@ public sealed class AccountManagerViewModel : ViewModelBase, IDisposable
     private static bool UsesAccountAddress(string? venueId)
     {
         return string.Equals(venueId, "Hyperliquid", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(venueId, "Aster", StringComparison.OrdinalIgnoreCase);
+               string.Equals(venueId, "Aster", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(venueId, "dYdX", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool RequiresAccountAddress(string? venueId)

@@ -9,6 +9,7 @@ public sealed class UserPreferenceRepository
 {
     private const string UiLanguageKey = "ui.language";
     private const string OrderLeverageKey = "order.leverage";
+    private const string OrderMarginModeKey = "order.margin_mode";
     private const string OrderQuantityKey = "order.quantity";
     private const string HttpApiPortKey = "http_api.port";
     private const string HttpApiEnabledKey = "http_api.enabled";
@@ -39,6 +40,9 @@ public sealed class UserPreferenceRepository
     public string GetOrderLeverageOrDefault(string defaultValue = "5")
         => GetPreferenceOrDefault(OrderLeverageKey, defaultValue);
 
+    public string GetOrderMarginModeOrDefault(string defaultValue = "Cross")
+        => GetPreferenceOrDefault(OrderMarginModeKey, defaultValue);
+
     public string GetOrderQuantityOrDefault(string defaultValue = "1")
         => GetPreferenceOrDefault(OrderQuantityKey, defaultValue);
 
@@ -50,6 +54,16 @@ public sealed class UserPreferenceRepository
         }
 
         SavePreference(OrderLeverageKey, leverage.Trim());
+    }
+
+    public void SaveOrderMarginMode(string marginMode)
+    {
+        if (string.IsNullOrWhiteSpace(marginMode))
+        {
+            return;
+        }
+
+        SavePreference(OrderMarginModeKey, marginMode.Trim());
     }
 
     public void SaveOrderQuantity(string quantity)

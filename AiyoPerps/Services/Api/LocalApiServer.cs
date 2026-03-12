@@ -636,7 +636,7 @@ public sealed class LocalApiServer : IAsyncDisposable
             Tool("accounts_create", "Create a new account profile with credentials.", ObjectSchema(
                 new Dictionary<string, object?>
                 {
-                    ["venueId"] = StringSchema("Venue name, for example BitMEX, Hyperliquid, Aster, or GRVT.", allowedValues: ["BitMEX", "Hyperliquid", "Aster", "GRVT"]),
+                    ["venueId"] = StringSchema("Venue name, for example BitMEX, Hyperliquid, Aster, GRVT, or dYdX.", allowedValues: ["BitMEX", "Hyperliquid", "Aster", "GRVT", "dYdX"]),
                     ["displayName"] = StringSchema("User-facing account display name."),
                     ["environment"] = StringSchema("Environment name, for example mainnet or testnet.", allowedValues: ["mainnet", "testnet"]),
                     ["summary"] = StringSchema("Short summary shown in the UI."),
@@ -654,7 +654,7 @@ public sealed class LocalApiServer : IAsyncDisposable
                 new Dictionary<string, object?>
                 {
                     ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
-                    ["venueId"] = StringSchema("Venue name, for example BitMEX, Hyperliquid, Aster, or GRVT.", allowedValues: ["BitMEX", "Hyperliquid", "Aster", "GRVT"]),
+                    ["venueId"] = StringSchema("Venue name, for example BitMEX, Hyperliquid, Aster, GRVT, or dYdX.", allowedValues: ["BitMEX", "Hyperliquid", "Aster", "GRVT", "dYdX"]),
                     ["displayName"] = StringSchema("User-facing account display name."),
                     ["environment"] = StringSchema("Environment name, for example mainnet or testnet.", allowedValues: ["mainnet", "testnet"]),
                     ["summary"] = StringSchema("Short summary shown in the UI."),
@@ -743,6 +743,7 @@ public sealed class LocalApiServer : IAsyncDisposable
                     ["side"] = StringSchema("buy, sell, long, or short.", allowedValues: ["buy", "sell", "long", "short"]),
                     ["orderType"] = StringSchema("market or limit.", allowedValues: ["market", "limit"]),
                     ["leverage"] = NumberSchema("Requested leverage."),
+                    ["marginMode"] = StringSchema("cross or isolated.", allowedValues: ["cross", "isolated"]),
                     ["amount"] = NumberSchema("Input amount."),
                     ["amountUnit"] = StringSchema("Amount unit, for example USD."),
                     ["limitPrice"] = NumberSchema("Required for limit orders.")

@@ -1,14 +1,14 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-COPY AiyoPerps.slnx ./
 COPY AiyoPerps/AiyoPerps.csproj AiyoPerps/
-RUN dotnet restore AiyoPerps.slnx -p:RestoreAdditionalProjectFallbackFolders=
+RUN dotnet restore AiyoPerps/AiyoPerps.csproj -p:RestoreAdditionalProjectFallbackFolders=
 
-COPY . .
+COPY AiyoPerps/ AiyoPerps/
 RUN dotnet publish AiyoPerps/AiyoPerps.csproj \
     -c Release \
     -o /app/publish \
+    --no-restore \
     -p:RestoreAdditionalProjectFallbackFolders=
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0

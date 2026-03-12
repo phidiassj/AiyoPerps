@@ -53,7 +53,7 @@ Path params:
 ### `POST /api/v1/accounts`
 ### `PUT /api/v1/accounts/{accountId}`
 Body: `ApiAccountUpsertRequest`
-- `venueId` (`string`, required): `BitMEX`, `Hyperliquid`, or `Aster`
+- `venueId` (`string`, required): `BitMEX`, `Hyperliquid`, `Aster`, `GRVT`, or `dYdX`
 - `displayName` (`string`, required)
 - `environment` (`string`, required): `mainnet` or `testnet`
 - `summary` (`string`, required)
