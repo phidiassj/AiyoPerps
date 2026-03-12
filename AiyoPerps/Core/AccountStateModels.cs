@@ -14,7 +14,8 @@ public sealed record VenuePosition(
     decimal MarkPrice,
     decimal UnrealizedPnlPct,
     decimal UnrealizedPnlUsd,
-    decimal RealizedPnlUsd);
+    decimal RealizedPnlUsd,
+    MarginMode MarginMode = MarginMode.Unknown);
 
 public sealed record VenueOpenOrder(
     string Symbol,
@@ -22,7 +23,8 @@ public sealed record VenueOpenOrder(
     decimal Leverage,
     decimal? LimitPrice,
     string Status,
-    string? OrderId);
+    string? OrderId,
+    MarginMode MarginMode = MarginMode.Unknown);
 
 public sealed record VenueBalance(
     string Asset,
@@ -35,7 +37,22 @@ public sealed record VenueAccountSnapshot(
     IReadOnlyList<VenueOpenOrder> OpenOrders,
     IReadOnlyList<VenueBalance> Balances);
 
+[Flags]
+public enum AccountSnapshotSections
+{
+    None = 0,
+    Positions = 1,
+    Orders = 2,
+    Balances = 4,
+    All = Positions | Orders | Balances
+}
+
 public interface IAccountStateProvider
 {
-    Task<VenueAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken = default);
+    Task<VenueAccountSnapshot> GetAccountSnapshotAsync(AccountSnapshotSections sections, CancellationToken cancellationToken = default);
+
+    Task<VenueAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        return GetAccountSnapshotAsync(AccountSnapshotSections.All, cancellationToken);
+    }
 }

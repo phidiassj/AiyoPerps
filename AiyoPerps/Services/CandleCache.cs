@@ -1,4 +1,5 @@
 using AiyoPerps.Core;
+using AiyoPerps.Models;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -18,6 +19,42 @@ public sealed class CandleCache(int maxCandlesPerKey = 1500)
         }
 
         return [];
+    }
+
+    public CandleViewPoint[] GetTailViewPoints(string venueId, string symbol, CandleInterval interval, int maxCount)
+    {
+        if (maxCount <= 0)
+        {
+            return [];
+        }
+
+        if (!_cache.TryGetValue((venueId, symbol, interval), out var map) || map.Count == 0)
+        {
+            return [];
+        }
+
+        var resultCount = Math.Min(maxCount, map.Count);
+        var skip = map.Count - resultCount;
+        var points = new CandleViewPoint[resultCount];
+        var currentIndex = 0;
+        var pointIndex = 0;
+
+        foreach (var candle in map.Values)
+        {
+            if (currentIndex++ < skip)
+            {
+                continue;
+            }
+
+            points[pointIndex++] = new CandleViewPoint(
+                candle.OpenTime,
+                candle.Open,
+                candle.High,
+                candle.Low,
+                candle.Close);
+        }
+
+        return points;
     }
 
     public void Upsert(Candle candle)

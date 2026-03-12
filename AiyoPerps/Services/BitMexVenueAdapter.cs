@@ -115,10 +115,46 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
         _wsCts = null;
     }
 
-    public Task<(bool IsSuccess, string Message)> ConfigureLeverageAsync(string symbol, decimal leverage, CancellationToken cancellationToken = default)
+    public async Task<(bool IsSuccess, string Message)> ConfigureLeverageAsync(string symbol, decimal leverage, MarginMode marginMode, CancellationToken cancellationToken = default)
     {
-        _logger.Info("BitMEX", $"ConfigureLeverage skipped symbol={symbol}, leverage={leverage}");
-        return Task.FromResult((true, "BitMEX leverage configuration skipped"));
+        if (marginMode == MarginMode.Unknown)
+        {
+            _logger.Info("BitMEX", $"ConfigureLeverage skipped symbol={symbol}, leverage={leverage}, marginMode=unknown");
+            return (true, "BitMEX leverage configuration skipped");
+        }
+
+        var normalizedSymbol = (symbol ?? string.Empty).Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(normalizedSymbol))
+        {
+            return (false, "BitMEX symbol is required");
+        }
+
+        var normalizedLeverage = Math.Max(1m, decimal.Round(leverage, 2, MidpointRounding.AwayFromZero));
+        var path = marginMode == MarginMode.Isolated
+            ? "/api/v1/position/leverage"
+            : "/api/v1/position/crossLeverage";
+        var payload = JsonSerializer.Serialize(new
+        {
+            symbol = normalizedSymbol,
+            leverage = normalizedLeverage
+        });
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, _restBase + path)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        };
+        ApplyAuthHeaders(request, HttpMethod.Post.Method, path, payload);
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.Warn("BitMEX", $"ConfigureLeverage failed symbol={normalizedSymbol}, leverage={normalizedLeverage}, marginMode={marginMode.ToApiValue()}, status={(int)response.StatusCode}, body={Trim(body)}");
+            return (false, NormalizeBitMexMarginModeError(body, marginMode));
+        }
+
+        _logger.Info("BitMEX", $"ConfigureLeverage applied symbol={normalizedSymbol}, leverage={normalizedLeverage}, marginMode={marginMode.ToApiValue()}");
+        return (true, "ok");
     }
 
     public Task<OrderAck> PlaceOrderAsync(string symbol, string side, decimal qty, decimal? price, CancellationToken cancellationToken = default)
@@ -316,19 +352,38 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
         return finalList;
     }
 
-    public async Task<VenueAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken = default)
+    public Task<VenueAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        return GetAccountSnapshotAsync(AccountSnapshotSections.All, cancellationToken);
+    }
+
+    public async Task<VenueAccountSnapshot> GetAccountSnapshotAsync(AccountSnapshotSections sections, CancellationToken cancellationToken = default)
     {
         if (!_credentials.HasApiCredentials)
         {
             return new VenueAccountSnapshot(DateTimeOffset.UtcNow, [], [], []);
         }
 
+        if (sections == AccountSnapshotSections.None)
+        {
+            return new VenueAccountSnapshot(DateTimeOffset.UtcNow, [], [], []);
+        }
+
         try
         {
-            var xbtUsd = await FetchXbtUsdPriceAsync(cancellationToken);
-            var positions = await FetchPositionsAsync(xbtUsd, cancellationToken);
-            var openOrders = await FetchOpenOrdersAsync(cancellationToken);
-            var balances = await FetchBalancesAsync(xbtUsd, cancellationToken);
+            var requiresXbtUsd = sections.HasFlag(AccountSnapshotSections.Positions) || sections.HasFlag(AccountSnapshotSections.Balances);
+            var xbtUsd = requiresXbtUsd
+                ? await FetchXbtUsdPriceAsync(cancellationToken)
+                : 0m;
+            var positions = sections.HasFlag(AccountSnapshotSections.Positions)
+                ? await FetchPositionsAsync(xbtUsd, cancellationToken)
+                : [];
+            var openOrders = sections.HasFlag(AccountSnapshotSections.Orders)
+                ? await FetchOpenOrdersAsync(cancellationToken)
+                : [];
+            var balances = sections.HasFlag(AccountSnapshotSections.Balances)
+                ? await FetchBalancesAsync(xbtUsd, cancellationToken)
+                : [];
 
             return new VenueAccountSnapshot(DateTimeOffset.UtcNow, positions, openOrders, balances);
         }
@@ -483,6 +538,10 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
                 realizedUsd = notionalUsd * (realizedPct / 100m);
             }
 
+            var marginMode = item.TryGetProperty("crossMargin", out var crossMarginElement) && crossMarginElement.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? (ReadBool(item, "crossMargin") ? MarginMode.Cross : MarginMode.Isolated)
+                : MarginMode.Unknown;
+
             output.Add(new VenuePosition(
                 symbol.ToUpperInvariant(),
                 qty,
@@ -492,7 +551,8 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
                 markPrice,
                 unrealizedPct,
                 unrealizedUsd,
-                realizedUsd));
+                realizedUsd,
+                marginMode));
         }
 
         return output;
@@ -575,7 +635,10 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
                 0m,
                 price > 0 ? price : null,
                 status,
-                orderId));
+                orderId,
+                item.TryGetProperty("crossMargin", out var crossMarginElement) && crossMarginElement.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? (ReadBool(item, "crossMargin") ? MarginMode.Cross : MarginMode.Isolated)
+                    : MarginMode.Unknown));
         }
 
         return output;
@@ -1034,6 +1097,56 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
     private static string Trim(string text)
     {
         return text.Length > 240 ? text[..240] : text;
+    }
+
+    private static string NormalizeBitMexMarginModeError(string body, MarginMode marginMode)
+    {
+        var modeText = marginMode == MarginMode.Isolated ? "Isolated" : "Cross";
+        var message = TryExtractBitMexErrorMessage(body) ?? Trim(body);
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            message = "Unknown BitMEX margin-mode error.";
+        }
+
+        if (message.Contains("multi-asset", StringComparison.OrdinalIgnoreCase))
+        {
+            return "BitMEX Multi-Asset Margin accounts support Cross only. Switch the account out of Multi-Asset Margin before using Isolated.";
+        }
+
+        if (message.Contains("position", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("open order", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"BitMEX rejected switching to {modeText}: close existing positions and cancel open orders for this symbol first.";
+        }
+
+        return $"BitMEX rejected switching to {modeText}: {message}";
+    }
+
+    private static string? TryExtractBitMexErrorMessage(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("error", out var error) &&
+                error.ValueKind == JsonValueKind.Object &&
+                error.TryGetProperty("message", out var message) &&
+                message.ValueKind == JsonValueKind.String)
+            {
+                return message.GetString();
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
     }
 
     private void ParseMessage(string json)

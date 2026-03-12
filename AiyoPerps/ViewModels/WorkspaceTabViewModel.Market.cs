@@ -5,9 +5,9 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
-using Avalonia.Threading;
 
 namespace AiyoPerps.ViewModels;
 
@@ -15,42 +15,241 @@ public sealed partial class WorkspaceTabViewModel
 {
     private void HandleTradeTick(string venueId, string symbol, TradeTick tick)
     {
-        // Size can be 0 for quote/ticker heartbeat updates. In that case update price shape but keep volume unchanged.
+        var diagnosticSample = ShouldSampleKlineDiagnostic(ref _lastKlineDataDiagnosticAt);
+        if (diagnosticSample && tick.Price > 0)
+        {
+            _logger.Info("KlineDiag", $"data update begin tabId={TabId}, symbol={symbol}, interval={SelectedInterval}, tickTs={tick.Timestamp:O}, tickPrice={tick.Price}, tickSize={tick.Size}");
+        }
+
+        var stopwatch = Stopwatch.StartNew();
         Candle? updated = null;
+        Candle? finalized = null;
 
         if (tick.Price > 0)
         {
             lock (_candleLock)
             {
                 var interval = ParseInterval(SelectedInterval);
-                if (_currentCandle is not null && (_currentCandle.Symbol != symbol || _currentCandle.Interval != interval))
+                var previous = _currentCandle;
+                if (previous is not null && (previous.Symbol != symbol || previous.Interval != interval))
                 {
                     _currentCandle = null;
+                    previous = null;
                 }
 
                 var update = _candleAggregator.Aggregate(venueId, symbol, interval, tick, _currentCandle);
                 updated = update.Candle;
+                if (previous is not null && previous.OpenTime != updated.OpenTime)
+                {
+                    finalized = _candleAggregator.CloseCurrent(previous);
+                    _candleCache.Upsert(finalized);
+                }
+
                 _currentCandle = updated;
                 _candleCache.Upsert(updated);
             }
 
-            _candlePersistChannel.Writer.TryWrite(updated);
-            Dispatcher.UIThread.Post(() => CandleStatus = FormatCandleStatus(updated));
+            QueueCandlePersist(finalized);
+            QueueCandlePersist(updated);
+            QueueMarketPriceUiUpdate(symbol, tick.Price);
+            QueueCandleUiUpdate(updated);
         }
 
-        Dispatcher.UIThread.Post(() =>
+        if (tick.Size > 0)
         {
-            UpdateOrderBookSnapshot(tick.Price);
-            UpdatePositionMarks(symbol, tick.Price);
-            if (tick.Size > 0)
-            {
-                AppendRecentTrade(tick);
-            }
-        });
+            QueueRecentTradeUiUpdate(tick);
+        }
 
-        if (updated is not null)
+        stopwatch.Stop();
+        if (tick.Price > 0)
         {
-            Dispatcher.UIThread.Post(UpdateCandleSeriesFromCache);
+            LogKlineDiagnosticIfNeeded(
+                "data update end",
+                stopwatch.ElapsedMilliseconds,
+                diagnosticSample,
+                SlowKlineDataUpdateMs,
+                ref _lastKlineDataDiagnosticAt,
+                $"tabId={TabId}, symbol={symbol}, interval={SelectedInterval}, currentOpen={(updated?.OpenTime.ToString("O") ?? "none")}, finalizedOpen={(finalized?.OpenTime.ToString("O") ?? "none")}, pendingUiFlush={Volatile.Read(ref _hasPendingMarketUiFlush)}, currentCandleClose={(updated?.Close.ToString(CultureInfo.InvariantCulture) ?? "none")}");
+        }
+    }
+
+    private void HandleOrderBookSnapshot(OrderBookSnapshot snapshot)
+    {
+        lock (_orderBookLock)
+        {
+            _liveOrderBookAsks.Clear();
+            _liveOrderBookBids.Clear();
+            ApplyOrderBookSide(_liveOrderBookAsks, snapshot.Asks);
+            ApplyOrderBookSide(_liveOrderBookBids, snapshot.Bids);
+            _hasLiveOrderBook = _liveOrderBookAsks.Count > 0 && _liveOrderBookBids.Count > 0;
+        }
+
+        QueueLiveOrderBookUiRefresh();
+    }
+
+    private void HandleOrderBookDelta(OrderBookDelta delta)
+    {
+        lock (_orderBookLock)
+        {
+            ApplyOrderBookSide(_liveOrderBookAsks, delta.Asks);
+            ApplyOrderBookSide(_liveOrderBookBids, delta.Bids);
+            _hasLiveOrderBook = _liveOrderBookAsks.Count > 0 && _liveOrderBookBids.Count > 0;
+        }
+
+        QueueLiveOrderBookUiRefresh();
+    }
+
+    private static void ApplyOrderBookSide(IDictionary<decimal, decimal> bookSide, IReadOnlyList<(decimal Price, decimal Size)> updates)
+    {
+        foreach (var (price, size) in updates)
+        {
+            if (price <= 0)
+            {
+                continue;
+            }
+
+            if (size <= 0)
+            {
+                bookSide.Remove(price);
+            }
+            else
+            {
+                bookSide[price] = size;
+            }
+        }
+    }
+
+    private void QueueCandlePersist(Candle? candle)
+    {
+        if (candle is null || !ShouldQueueCandlePersist(candle))
+        {
+            if (candle is not null)
+            {
+                Interlocked.Increment(ref _candlePersistSkippedCount);
+            }
+
+            return;
+        }
+
+        Interlocked.Increment(ref _candlePersistQueuedCount);
+        _candlePersistChannel.Writer.TryWrite(candle);
+    }
+
+    private bool ShouldQueueCandlePersist(Candle candle)
+    {
+        var key = BuildStorageKey(candle.VenueId, candle.Symbol, candle.Interval);
+        var now = DateTimeOffset.UtcNow;
+        lock (_candlePersistStateLock)
+        {
+            if (!_lastCandlePersistAt.TryGetValue(key, out var lastPersistAt) ||
+                !_lastCandlePersistOpenTime.TryGetValue(key, out var lastOpenTime) ||
+                lastOpenTime != candle.OpenTime)
+            {
+                _lastCandlePersistAt[key] = now;
+                _lastCandlePersistOpenTime[key] = candle.OpenTime;
+                return true;
+            }
+
+            if (candle.IsClosed || now - lastPersistAt >= OpenCandlePersistInterval)
+            {
+                _lastCandlePersistAt[key] = now;
+                _lastCandlePersistOpenTime[key] = candle.OpenTime;
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    private void QueueMarketPriceUiUpdate(string symbol, decimal price)
+    {
+        var shouldRefreshOrderBook = ShouldRefreshSyntheticOrderBook();
+        lock (_marketUiLock)
+        {
+            _pendingUiMidPrice = price;
+            _pendingUiSymbol = symbol;
+            _pendingUiOrderBookRefresh |= shouldRefreshOrderBook;
+        }
+
+        Interlocked.Exchange(ref _hasPendingMarketUiFlush, 1);
+    }
+
+    private void QueueRecentTradeUiUpdate(TradeTick tick)
+    {
+        lock (_marketUiLock)
+        {
+            if (_pendingUiRecentTrades.Count >= MaxPendingUiRecentTrades)
+            {
+                _pendingUiRecentTrades.RemoveAt(0);
+            }
+
+            _pendingUiRecentTrades.Add(tick);
+        }
+
+        Interlocked.Increment(ref _marketUiQueuedTradeCount);
+        Interlocked.Exchange(ref _hasPendingMarketUiFlush, 1);
+    }
+
+    private void QueueCandleUiUpdate(Candle candle)
+    {
+        lock (_marketUiLock)
+        {
+            _pendingUiCandleStatus = FormatCandleStatus(candle);
+            _pendingUiCandleSeriesRefresh = true;
+        }
+
+        Interlocked.Exchange(ref _hasPendingMarketUiFlush, 1);
+    }
+
+    private void QueueLiveOrderBookUiRefresh()
+    {
+        var midPrice = TryGetLiveOrderBookMidPrice();
+        lock (_marketUiLock)
+        {
+            if (midPrice.HasValue && midPrice.Value > 0)
+            {
+                _pendingUiMidPrice = midPrice.Value;
+                _pendingUiSymbol = Symbol;
+            }
+
+            _pendingUiOrderBookRefresh = true;
+        }
+
+        Interlocked.Increment(ref _marketUiQueuedOrderBookCount);
+        Interlocked.Exchange(ref _hasPendingMarketUiFlush, 1);
+    }
+
+    private bool ShouldRefreshSyntheticOrderBook()
+    {
+        lock (_orderBookLock)
+        {
+            return !_hasLiveOrderBook || _liveOrderBookAsks.Count == 0 || _liveOrderBookBids.Count == 0;
+        }
+    }
+
+    private void ResetPendingMarketUiState()
+    {
+        lock (_marketUiLock)
+        {
+            _pendingUiEventTimestamp = null;
+            _pendingUiMidPrice = null;
+            _pendingUiSymbol = null;
+            _pendingUiCandleStatus = null;
+            _pendingUiCandleSeriesRefresh = false;
+            _pendingUiOrderBookRefresh = false;
+            _pendingUiRecentTrades.Clear();
+        }
+
+        Interlocked.Exchange(ref _hasPendingMarketUiFlush, 0);
+    }
+
+    private void ResetLiveOrderBook()
+    {
+        lock (_orderBookLock)
+        {
+            _liveOrderBookAsks.Clear();
+            _liveOrderBookBids.Clear();
+            _hasLiveOrderBook = false;
         }
     }
 
@@ -326,7 +525,7 @@ public sealed partial class WorkspaceTabViewModel
 
     private static string FormatCandleStatus(Candle candle)
     {
-        return $"{candle.Interval}   O:{NumberText.Trim(candle.Open)}   H:{NumberText.Trim(candle.High)}   L:{NumberText.Trim(candle.Low)}   C:{NumberText.Trim(candle.Close)}   V:{NumberText.Trim(candle.Volume)}";
+        return CandleStatusFormatter.FormatLive(candle);
     }
 
     private static string BuildOrderBookSummary(decimal mid)
@@ -350,13 +549,235 @@ public sealed partial class WorkspaceTabViewModel
 
     private void UpdateOrderBookSnapshot(decimal mid)
     {
-        OrderBookSummary = BuildOrderBookSummary(mid);
-        _lastMidPrice = mid;
+        if (TryBuildLiveOrderBookView(ParseOrderBookTickSize(), out var liveAsks, out var liveBids, out var liveSpreadText, out var liveSummary, out var liveMidPrice))
+        {
+            ApplyOrderBookView(liveAsks, liveBids, liveSpreadText, liveSummary, liveMidPrice);
+            return;
+        }
+
         var snapshot = BuildOrderBookLevels(mid, ParseOrderBookTickSize());
-        AskLevels = snapshot.Asks;
-        BidLevels = snapshot.Bids;
-        SpreadText = snapshot.SpreadText;
-        RecalculateOrderEstimates();
+        ApplyOrderBookView(snapshot.Asks, snapshot.Bids, snapshot.SpreadText, BuildOrderBookSummary(mid), mid);
+    }
+
+    private void ApplyOrderBookView(
+        IReadOnlyList<OrderBookLevelRow> asks,
+        IReadOnlyList<OrderBookLevelRow> bids,
+        string spreadText,
+        string summary,
+        decimal midPrice)
+    {
+        var rowsChanged =
+            !AreOrderBookRowsEqual(_askLevels, asks) ||
+            !AreOrderBookRowsEqual(_bidLevels, bids);
+        var spreadChanged = !string.Equals(_spreadText, spreadText, StringComparison.Ordinal);
+        var summaryChanged = !string.Equals(_orderBookSummary, summary, StringComparison.Ordinal);
+        var midChanged = !_lastMidPrice.HasValue || _lastMidPrice.Value != midPrice;
+
+        if (!rowsChanged && !spreadChanged && !summaryChanged && !midChanged)
+        {
+            return;
+        }
+
+        _lastMidPrice = midPrice;
+        if (summaryChanged)
+        {
+            OrderBookSummary = summary;
+        }
+
+        if (rowsChanged)
+        {
+            AskLevels = asks;
+            BidLevels = bids;
+        }
+
+        if (spreadChanged)
+        {
+            SpreadText = spreadText;
+        }
+
+        if (midChanged)
+        {
+            RecalculateOrderEstimates();
+        }
+    }
+
+    private bool TryBuildLiveOrderBookView(
+        decimal tickSize,
+        out IReadOnlyList<OrderBookLevelRow> asks,
+        out IReadOnlyList<OrderBookLevelRow> bids,
+        out string spreadText,
+        out string summary,
+        out decimal midPrice)
+    {
+        List<(decimal Price, decimal Size)> aggregatedAsks;
+        List<(decimal Price, decimal Size)> aggregatedBids;
+        decimal bestAsk;
+        decimal bestBid;
+        lock (_orderBookLock)
+        {
+            if (!_hasLiveOrderBook || _liveOrderBookAsks.Count == 0 || _liveOrderBookBids.Count == 0)
+            {
+                asks = Array.Empty<OrderBookLevelRow>();
+                bids = Array.Empty<OrderBookLevelRow>();
+                spreadText = "Spread -";
+                summary = "尚無委託簿資料";
+                midPrice = 0m;
+                return false;
+            }
+
+            bestAsk = _liveOrderBookAsks.First().Key;
+            bestBid = _liveOrderBookBids.First().Key;
+            aggregatedAsks = AggregateVisibleOrderBookSide(_liveOrderBookAsks, tickSize, isAsk: true);
+            aggregatedBids = AggregateVisibleOrderBookSide(_liveOrderBookBids, tickSize, isAsk: false);
+        }
+
+        if (bestAsk <= 0 || bestBid <= 0 || bestAsk <= bestBid)
+        {
+            asks = Array.Empty<OrderBookLevelRow>();
+            bids = Array.Empty<OrderBookLevelRow>();
+            spreadText = "Spread -";
+            summary = "尚無委託簿資料";
+            midPrice = 0m;
+            return false;
+        }
+
+        if (aggregatedAsks.Count == 0 || aggregatedBids.Count == 0)
+        {
+            asks = Array.Empty<OrderBookLevelRow>();
+            bids = Array.Empty<OrderBookLevelRow>();
+            spreadText = "Spread -";
+            summary = "尚無委託簿資料";
+            midPrice = 0m;
+            return false;
+        }
+
+        asks = BuildOrderBookRows(aggregatedAsks, isAsk: true);
+        bids = BuildOrderBookRows(aggregatedBids, isAsk: false);
+        midPrice = (aggregatedAsks[0].Price + aggregatedBids[0].Price) / 2m;
+        var spread = aggregatedAsks[0].Price - aggregatedBids[0].Price;
+        var spreadPct = midPrice == 0 ? 0 : (spread / midPrice) * 100m;
+        spreadText = $"Spread {NumberText.Trim(spread)} ({NumberText.Trim(spreadPct)}%)";
+        summary = BuildLiveOrderBookSummary(aggregatedAsks, aggregatedBids, midPrice);
+        return true;
+    }
+
+    private static List<(decimal Price, decimal Size)> AggregateVisibleOrderBookSide(IEnumerable<KeyValuePair<decimal, decimal>> source, decimal tickSize, bool isAsk, int maxBuckets = 8)
+    {
+        var normalizedTick = tickSize > 0 ? tickSize : 1m;
+        var buckets = new List<(decimal Price, decimal Size)>(maxBuckets);
+        foreach (var entry in source)
+        {
+            var price = entry.Key;
+            var size = entry.Value;
+            if (price <= 0 || size <= 0)
+            {
+                continue;
+            }
+
+            var bucketPrice = isAsk
+                ? decimal.Ceiling(price / normalizedTick) * normalizedTick
+                : decimal.Floor(price / normalizedTick) * normalizedTick;
+            if (bucketPrice <= 0)
+            {
+                continue;
+            }
+
+            if (buckets.Count > 0 && buckets[^1].Price == bucketPrice)
+            {
+                buckets[^1] = (bucketPrice, buckets[^1].Size + size);
+                continue;
+            }
+
+            if (buckets.Count == maxBuckets)
+            {
+                break;
+            }
+
+            buckets.Add((bucketPrice, size));
+        }
+
+        return buckets;
+    }
+
+    private static IReadOnlyList<OrderBookLevelRow> BuildOrderBookRows(IReadOnlyList<(decimal Price, decimal Size)> levels, bool isAsk)
+    {
+        var runningTotal = 0m;
+        var rows = new List<OrderBookLevelRow>(levels.Count);
+        foreach (var (price, size) in levels)
+        {
+            runningTotal += size;
+            rows.Add(new OrderBookLevelRow(price, size, runningTotal, isAsk));
+        }
+
+        if (isAsk)
+        {
+            rows.Reverse();
+        }
+
+        return rows;
+    }
+
+    private static bool AreOrderBookRowsEqual(IReadOnlyList<OrderBookLevelRow> current, IReadOnlyList<OrderBookLevelRow> next)
+    {
+        if (ReferenceEquals(current, next))
+        {
+            return true;
+        }
+
+        if (current.Count != next.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < current.Count; i++)
+        {
+            if (current[i] != next[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string BuildLiveOrderBookSummary(IReadOnlyList<(decimal Price, decimal Size)> asks, IReadOnlyList<(decimal Price, decimal Size)> bids, decimal midPrice)
+    {
+        var askRows = asks.Take(3).Reverse().ToList();
+        var bidRows = bids.Take(3).ToList();
+        var lines = new List<string>(7);
+        foreach (var (price, size) in askRows)
+        {
+            lines.Add($"ASK {NumberText.Trim(price)} x {NumberText.Trim(size, useGrouping: true)}");
+        }
+
+        lines.Add($"MID {NumberText.Trim(midPrice)}");
+
+        foreach (var (price, size) in bidRows)
+        {
+            lines.Add($"BID {NumberText.Trim(price)} x {NumberText.Trim(size, useGrouping: true)}");
+        }
+
+        return string.Join('\n', lines);
+    }
+
+    private decimal? TryGetLiveOrderBookMidPrice()
+    {
+        lock (_orderBookLock)
+        {
+            if (!_hasLiveOrderBook || _liveOrderBookAsks.Count == 0 || _liveOrderBookBids.Count == 0)
+            {
+                return null;
+            }
+
+            var bestAsk = _liveOrderBookAsks.First().Key;
+            var bestBid = _liveOrderBookBids.First().Key;
+            if (bestAsk <= 0 || bestBid <= 0 || bestAsk <= bestBid)
+            {
+                return null;
+            }
+
+            return (bestAsk + bestBid) / 2m;
+        }
     }
 
     private static (IReadOnlyList<OrderBookLevelRow> Asks, IReadOnlyList<OrderBookLevelRow> Bids, string SpreadText) BuildOrderBookLevels(decimal mid, decimal tickSize)

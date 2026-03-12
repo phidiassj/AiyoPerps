@@ -163,13 +163,43 @@ public sealed class GrvtVenueAdapter : IPerpVenue, IHistoricalCandleProvider, IA
         _tradePollSymbol = null;
     }
 
-    public async Task<(bool IsSuccess, string Message)> ConfigureLeverageAsync(string symbol, decimal leverage, CancellationToken cancellationToken = default)
+    public async Task<(bool IsSuccess, string Message)> ConfigureLeverageAsync(string symbol, decimal leverage, MarginMode marginMode, CancellationToken cancellationToken = default)
     {
-        // GRVT deprecated leverage endpoint (code=2106). Keep this as non-blocking no-op
-        // so order placement is not interrupted by deprecated API behavior.
-        _logger.Info("GRVT", $"ConfigureLeverage skipped symbol={symbol}, leverage={leverage}, reason=deprecated_api");
-        await Task.CompletedTask;
-        return (true, "GRVT leverage update skipped (deprecated API)");
+        var auth = await EnsureAuthenticatedAsync(cancellationToken);
+        if (!auth.IsSuccess)
+        {
+            return auth;
+        }
+
+        var subAccountId = (_credentials.SubAccountId ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(subAccountId))
+        {
+            return (false, "GRVT requires subAccountId");
+        }
+
+        if (marginMode == MarginMode.Unknown)
+        {
+            _logger.Info("GRVT", $"ConfigureLeverage skipped symbol={symbol}, leverage={leverage}, marginMode=unknown");
+            return (true, "GRVT leverage update skipped (unknown margin mode)");
+        }
+
+        var request = new
+        {
+            sub_account_id = subAccountId,
+            instrument = NormalizeSymbol(symbol),
+            leverage = decimal.Round(Math.Max(1m, leverage), 2, MidpointRounding.AwayFromZero),
+            margin_type = marginMode == MarginMode.Isolated ? "ISOLATED" : "CROSS"
+        };
+
+        var (ok, _, body) = await PostTradingAsync("/full/v1/set_position_config", request, cancellationToken);
+        if (!ok)
+        {
+            _logger.Warn("GRVT", $"ConfigureLeverage failed symbol={symbol}, leverage={leverage}, marginMode={marginMode.ToApiValue()}, body={Trim(body)}");
+            return (false, NormalizeGrvtMarginModeError(body, marginMode));
+        }
+
+        _logger.Info("GRVT", $"ConfigureLeverage applied symbol={symbol}, leverage={leverage}, marginMode={marginMode.ToApiValue()}, subAccountId={subAccountId}");
+        return (true, "ok");
     }
 
     public Task<OrderAck> PlaceOrderAsync(string symbol, string side, decimal qty, decimal? price, CancellationToken cancellationToken = default)
@@ -381,12 +411,22 @@ public sealed class GrvtVenueAdapter : IPerpVenue, IHistoricalCandleProvider, IA
         return filled;
     }
 
-    public async Task<VenueAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken = default)
+    public Task<VenueAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        return GetAccountSnapshotAsync(AccountSnapshotSections.All, cancellationToken);
+    }
+
+    public async Task<VenueAccountSnapshot> GetAccountSnapshotAsync(AccountSnapshotSections sections, CancellationToken cancellationToken = default)
     {
         var auth = await EnsureAuthenticatedAsync(cancellationToken);
         if (!auth.IsSuccess)
         {
             _logger.Warn("GRVT", $"GetAccountSnapshot auth failed: {auth.Message}");
+            return new VenueAccountSnapshot(DateTimeOffset.UtcNow, [], [], []);
+        }
+
+        if (sections == AccountSnapshotSections.None)
+        {
             return new VenueAccountSnapshot(DateTimeOffset.UtcNow, [], [], []);
         }
 
@@ -397,9 +437,15 @@ public sealed class GrvtVenueAdapter : IPerpVenue, IHistoricalCandleProvider, IA
             return new VenueAccountSnapshot(DateTimeOffset.UtcNow, [], [], []);
         }
 
-        var positions = await FetchPositionsAsync(sub, cancellationToken);
-        var orders = await FetchOpenOrdersAsync(sub, cancellationToken);
-        var balances = await FetchBalancesAsync(sub, cancellationToken);
+        var positions = sections.HasFlag(AccountSnapshotSections.Positions)
+            ? await FetchPositionsAsync(sub, cancellationToken)
+            : [];
+        var orders = sections.HasFlag(AccountSnapshotSections.Orders)
+            ? await FetchOpenOrdersAsync(sub, cancellationToken)
+            : [];
+        var balances = sections.HasFlag(AccountSnapshotSections.Balances)
+            ? await FetchBalancesAsync(sub, cancellationToken)
+            : [];
         return new VenueAccountSnapshot(DateTimeOffset.UtcNow, positions, orders, balances);
     }
 
@@ -823,7 +869,17 @@ public sealed class GrvtVenueAdapter : IPerpVenue, IHistoricalCandleProvider, IA
             }
 
             var pct = notional > 0 ? (unreal / notional) * 100m : 0m;
-            rows.Add(new VenuePosition(NormalizeSymbol(symbol), qty, notional, lev <= 0 ? 1m : lev, entry, mark, pct, unreal, realized));
+            rows.Add(new VenuePosition(
+                NormalizeSymbol(symbol),
+                qty,
+                notional,
+                lev <= 0 ? 1m : lev,
+                entry,
+                mark,
+                pct,
+                unreal,
+                realized,
+                ParseMarginMode(item)));
         }
 
         return rows;
@@ -894,7 +950,8 @@ public sealed class GrvtVenueAdapter : IPerpVenue, IHistoricalCandleProvider, IA
                 0m,
                 price > 0 ? price : null,
                 status,
-                ReadString(item, "order_id") ?? ReadString(item, "id") ?? ReadString(item, "client_order_id")));
+                ReadString(item, "order_id") ?? ReadString(item, "id") ?? ReadString(item, "client_order_id"),
+                ParseMarginMode(item)));
         }
 
         return rows;
@@ -1229,6 +1286,22 @@ public sealed class GrvtVenueAdapter : IPerpVenue, IHistoricalCandleProvider, IA
         }
 
         return (true, root, body);
+    }
+
+    private static MarginMode ParseMarginMode(JsonElement item)
+    {
+        var raw = ReadString(item, "margin_type") ??
+                  ReadString(item, "position_margin_type");
+
+        if (string.IsNullOrWhiteSpace(raw) &&
+            item.TryGetProperty("config", out var configNode) &&
+            configNode.ValueKind == JsonValueKind.Object)
+        {
+            raw = ReadString(configNode, "margin_type") ??
+                  ReadString(configNode, "position_margin_type");
+        }
+
+        return MarginModeText.ParseOrDefault(raw, MarginMode.Unknown);
     }
 
     private async Task<(bool Ok, JsonElement Root, string Body)> PostMarketAsync(string path, object request, CancellationToken cancellationToken)
@@ -1684,6 +1757,65 @@ public sealed class GrvtVenueAdapter : IPerpVenue, IHistoricalCandleProvider, IA
     private static string Trim(string text)
     {
         return text.Length > 300 ? text[..300] : text;
+    }
+
+    private static string NormalizeGrvtMarginModeError(string body, MarginMode marginMode)
+    {
+        var modeText = marginMode == MarginMode.Isolated ? "Isolated" : "Cross";
+        var message = TryExtractGrvtErrorMessage(body) ?? Trim(body);
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            message = "Unknown GRVT margin-mode error.";
+        }
+
+        if (message.Contains("position", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("open order", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"GRVT rejected switching to {modeText}: close existing positions and cancel open orders for this instrument first.";
+        }
+
+        return $"GRVT rejected switching to {modeText}: {message}";
+    }
+
+    private static string? TryExtractGrvtErrorMessage(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String)
+                {
+                    return message.GetString();
+                }
+
+                if (root.TryGetProperty("error", out var error))
+                {
+                    if (error.ValueKind == JsonValueKind.String)
+                    {
+                        return error.GetString();
+                    }
+
+                    if (error.ValueKind == JsonValueKind.Object &&
+                        error.TryGetProperty("message", out var nestedMessage) &&
+                        nestedMessage.ValueKind == JsonValueKind.String)
+                    {
+                        return nestedMessage.GetString();
+                    }
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
     }
 
     private static DateTimeOffset AlignToIntervalStart(DateTimeOffset ts, CandleInterval interval)

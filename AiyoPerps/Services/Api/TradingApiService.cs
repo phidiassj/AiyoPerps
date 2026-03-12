@@ -246,7 +246,7 @@ public sealed class TradingApiService : IAsyncDisposable
 
     public async Task<IReadOnlyList<ApiPositionDto>> ListPositionsAsync(Guid accountId, string? symbol, CancellationToken cancellationToken = default)
     {
-        var snapshot = await GetSnapshotAsync(accountId, symbol, cancellationToken);
+        var snapshot = await GetSnapshotAsync(accountId, symbol, AccountSnapshotSections.Positions, cancellationToken);
         return snapshot.Positions.Select(p => new ApiPositionDto(
             p.Symbol,
             p.Symbol,
@@ -257,24 +257,26 @@ public sealed class TradingApiService : IAsyncDisposable
             p.MarkPrice,
             p.UnrealizedPnlPct,
             p.UnrealizedPnlUsd,
-            p.RealizedPnlUsd)).ToList();
+            p.RealizedPnlUsd,
+            p.MarginMode.ToApiValue())).ToList();
     }
 
     public async Task<IReadOnlyList<ApiOpenOrderDto>> ListOpenOrdersAsync(Guid accountId, string? symbol, CancellationToken cancellationToken = default)
     {
-        var snapshot = await GetSnapshotAsync(accountId, symbol, cancellationToken);
+        var snapshot = await GetSnapshotAsync(accountId, symbol, AccountSnapshotSections.Orders, cancellationToken);
         return snapshot.OpenOrders.Select(o => new ApiOpenOrderDto(
             o.Symbol,
             o.NotionalUsd,
             o.Leverage,
             o.LimitPrice,
             o.Status,
-            o.OrderId)).ToList();
+            o.OrderId,
+            o.MarginMode.ToApiValue())).ToList();
     }
 
     public async Task<IReadOnlyList<ApiBalanceDto>> ListBalancesAsync(Guid accountId, string? symbol, CancellationToken cancellationToken = default)
     {
-        var snapshot = await GetSnapshotAsync(accountId, symbol, cancellationToken);
+        var snapshot = await GetSnapshotAsync(accountId, symbol, AccountSnapshotSections.Balances, cancellationToken);
         return snapshot.Balances.Select(b => new ApiBalanceDto(b.Asset, b.Quantity, b.UsdValue)).ToList();
     }
 
@@ -289,7 +291,8 @@ public sealed class TradingApiService : IAsyncDisposable
             throw new ApiBadRequestException("Leverage must be positive.");
         }
 
-        var leverageResult = await session.Venue.ConfigureLeverageAsync(session.Symbol, request.Leverage, cancellationToken);
+        var marginMode = MarginModeText.ParseOrDefault(request.MarginMode, MarginMode.Cross);
+        var leverageResult = await session.Venue.ConfigureLeverageAsync(session.Symbol, request.Leverage, marginMode, cancellationToken);
         if (!leverageResult.IsSuccess)
         {
             throw new ApiConflictException(leverageResult.Message);
@@ -323,11 +326,17 @@ public sealed class TradingApiService : IAsyncDisposable
             throw new ApiConflictException(ack.Message ?? "Order rejected by venue.");
         }
 
+        var returnsClientOrderId = ReturnsClientOrderId(session.Venue.VenueId);
+        var venueOrderId = returnsClientOrderId ? null : ack.ClientOrderId;
+        var clientOrderId = returnsClientOrderId ? ack.ClientOrderId : null;
+
         return new
         {
             accountId = request.AccountId,
             symbol = session.Symbol,
-            orderId = ack.ClientOrderId,
+            orderId = venueOrderId ?? ack.ClientOrderId,
+            clientOrderId,
+            venueOrderId,
             side,
             orderType = isLimit ? "limit" : "market",
             leverage = request.Leverage,
@@ -341,7 +350,7 @@ public sealed class TradingApiService : IAsyncDisposable
 
     public async Task<object> ClosePositionAsync(ApiClosePositionRequest request, CancellationToken cancellationToken = default)
     {
-        var snapshot = await GetSnapshotAsync(request.AccountId, request.PositionId, cancellationToken);
+        var snapshot = await GetSnapshotAsync(request.AccountId, request.PositionId, AccountSnapshotSections.Positions, cancellationToken);
         var position = snapshot.Positions.FirstOrDefault(x =>
             string.Equals(x.Symbol, request.PositionId, StringComparison.OrdinalIgnoreCase));
 
@@ -502,7 +511,7 @@ public sealed class TradingApiService : IAsyncDisposable
         _sessionGate.Dispose();
     }
 
-    private async Task<VenueAccountSnapshot> GetSnapshotAsync(Guid accountId, string? symbol, CancellationToken cancellationToken)
+    private async Task<VenueAccountSnapshot> GetSnapshotAsync(Guid accountId, string? symbol, AccountSnapshotSections sections, CancellationToken cancellationToken)
     {
         var session = await GetSessionForSnapshotAsync(accountId, symbol, cancellationToken);
         if (session.Venue is not IAccountStateProvider provider)
@@ -510,7 +519,7 @@ public sealed class TradingApiService : IAsyncDisposable
             throw new ApiBadRequestException($"Venue does not expose account state: {session.Venue.VenueId}");
         }
 
-        return await provider.GetAccountSnapshotAsync(cancellationToken);
+        return await provider.GetAccountSnapshotAsync(sections, cancellationToken);
     }
 
     private async Task<ApiConnectionSession> GetSessionAsync(Guid accountId, string symbol, CancellationToken cancellationToken)
@@ -581,6 +590,11 @@ public sealed class TradingApiService : IAsyncDisposable
         }
 
         return normalized;
+    }
+
+    private static bool ReturnsClientOrderId(string venueId)
+    {
+        return string.Equals((venueId ?? string.Empty).Trim(), "dYdX", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ParseOrderSide(string rawSide)

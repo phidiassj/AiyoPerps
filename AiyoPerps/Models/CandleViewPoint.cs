@@ -2,4 +2,4 @@ using System;
 
 namespace AiyoPerps.Models;
 
-public sealed record CandleViewPoint(DateTimeOffset OpenTime, decimal Open, decimal High, decimal Low, decimal Close);
+public readonly record struct CandleViewPoint(DateTimeOffset OpenTime, decimal Open, decimal High, decimal Low, decimal Close);

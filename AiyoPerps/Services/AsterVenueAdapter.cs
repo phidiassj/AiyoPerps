@@ -125,7 +125,7 @@ public sealed class AsterVenueAdapter : IPerpVenue, IHistoricalCandleProvider, I
         _wsCts = null;
     }
 
-    public async Task<(bool IsSuccess, string Message)> ConfigureLeverageAsync(string symbol, decimal leverage, CancellationToken cancellationToken = default)
+    public async Task<(bool IsSuccess, string Message)> ConfigureLeverageAsync(string symbol, decimal leverage, MarginMode marginMode, CancellationToken cancellationToken = default)
     {
         if (!HasAsterSignerCredentials())
         {
@@ -136,6 +136,12 @@ public sealed class AsterVenueAdapter : IPerpVenue, IHistoricalCandleProvider, I
         if (!mode.IsSuccess)
         {
             return mode;
+        }
+
+        var marginModeResult = await EnsureMarginModeAsync(symbol, marginMode, cancellationToken);
+        if (!marginModeResult.IsSuccess)
+        {
+            return marginModeResult;
         }
 
         var lev = Math.Max(1, (int)Math.Round(leverage, MidpointRounding.AwayFromZero));
@@ -273,17 +279,44 @@ public sealed class AsterVenueAdapter : IPerpVenue, IHistoricalCandleProvider, I
         return resampled.TakeLast(count).ToList();
     }
 
-    public async Task<VenueAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken = default)
+    public Task<VenueAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        return GetAccountSnapshotAsync(AccountSnapshotSections.All, cancellationToken);
+    }
+
+    public async Task<VenueAccountSnapshot> GetAccountSnapshotAsync(AccountSnapshotSections sections, CancellationToken cancellationToken = default)
     {
         if (!HasAsterSignerCredentials())
         {
             return new VenueAccountSnapshot(DateTimeOffset.UtcNow, [], [], []);
         }
 
+        if (sections == AccountSnapshotSections.None)
+        {
+            return new VenueAccountSnapshot(DateTimeOffset.UtcNow, [], [], []);
+        }
+
         try
         {
-            var (positions, balances) = await FetchAccountSnapshotCoreAsync(cancellationToken);
-            var orders = await FetchOpenOrdersAsync(cancellationToken);
+            List<VenuePosition> positions = [];
+            List<VenueBalance> balances = [];
+            if (sections.HasFlag(AccountSnapshotSections.Positions) || sections.HasFlag(AccountSnapshotSections.Balances))
+            {
+                var snapshot = await FetchAccountSnapshotCoreAsync(cancellationToken);
+                if (sections.HasFlag(AccountSnapshotSections.Positions))
+                {
+                    positions = snapshot.Positions;
+                }
+
+                if (sections.HasFlag(AccountSnapshotSections.Balances))
+                {
+                    balances = snapshot.Balances;
+                }
+            }
+
+            var orders = sections.HasFlag(AccountSnapshotSections.Orders)
+                ? await FetchOpenOrdersAsync(cancellationToken)
+                : [];
             return new VenueAccountSnapshot(DateTimeOffset.UtcNow, positions, orders, balances);
         }
         catch (Exception ex)
@@ -350,6 +383,94 @@ public sealed class AsterVenueAdapter : IPerpVenue, IHistoricalCandleProvider, I
         {
             _positionModeGate.Release();
         }
+    }
+
+    private async Task<(bool IsSuccess, string Message)> EnsureMarginModeAsync(string symbol, MarginMode marginMode, CancellationToken cancellationToken)
+    {
+        if (marginMode == MarginMode.Unknown)
+        {
+            return (true, "ok");
+        }
+
+        var form = new Dictionary<string, object>(StringComparer.Ordinal)
+        {
+            ["symbol"] = NormalizeSymbol(symbol),
+            ["marginType"] = marginMode == MarginMode.Isolated ? "ISOLATED" : "CROSSED"
+        };
+
+        var (ok, body, _) = await SendSignedAsync(HttpMethod.Post, "/fapi/v1/marginType", form, cancellationToken);
+        if (ok || IsAsterMarginModeNoOp(body))
+        {
+            return (true, "ok");
+        }
+
+        return (false, NormalizeAsterMarginModeError(body, marginMode));
+    }
+
+    private static bool IsAsterMarginModeNoOp(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return false;
+        }
+
+        return body.Contains("No need to change margin type", StringComparison.OrdinalIgnoreCase) ||
+               body.Contains("\"code\":-4046", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeAsterMarginModeError(string body, MarginMode marginMode)
+    {
+        var modeText = marginMode == MarginMode.Isolated ? "Isolated" : "Cross";
+        var message = TryExtractJsonMessage(body) ?? Trim(body);
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            message = "Unknown Aster margin-mode error.";
+        }
+
+        if (message.Contains("Multi-Assets mode", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("multi-asset", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Aster Multi-Asset Mode supports Cross only. Switch the exchange account back to single-asset mode before using Isolated.";
+        }
+
+        if (message.Contains("open orders", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("position", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"Aster rejected switching to {modeText}: close existing positions and cancel open orders for this symbol first.";
+        }
+
+        return $"Aster rejected switching to {modeText}: {message}";
+    }
+
+    private static string? TryExtractJsonMessage(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("msg", out var msg) && msg.ValueKind == JsonValueKind.String)
+                {
+                    return msg.GetString();
+                }
+
+                if (root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String)
+                {
+                    return message.GetString();
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
     }
 
     private async Task<OrderAck> PlaceOrderCoreAsync(string symbol, string side, decimal qty, decimal? price, bool reduceOnly, CancellationToken cancellationToken)
@@ -608,7 +729,17 @@ public sealed class AsterVenueAdapter : IPerpVenue, IHistoricalCandleProvider, I
             }
 
             var pct = notional > 0 ? unrealized / notional * 100m : 0m;
-            rows.Add(new VenuePosition(symbol, qty, Math.Abs(notional), leverage <= 0 ? 1 : leverage, entry, mark, pct, unrealized, 0m));
+            rows.Add(new VenuePosition(
+                symbol,
+                qty,
+                Math.Abs(notional),
+                leverage <= 0 ? 1 : leverage,
+                entry,
+                mark,
+                pct,
+                unrealized,
+                0m,
+                MarginModeText.ParseOrDefault(TryReadString(item, "marginType"), MarginMode.Unknown)));
         }
 
         return rows;
@@ -642,7 +773,14 @@ public sealed class AsterVenueAdapter : IPerpVenue, IHistoricalCandleProvider, I
             var status = TryReadString(item, "status") ?? string.Empty;
             var orderId = TryReadString(item, "orderId");
             var notional = Math.Abs(origQty * (price > 0 ? price : ParseDecimal(item, "avgPrice")));
-            rows.Add(new VenueOpenOrder(symbol, notional, 0m, price > 0 ? price : null, status, orderId));
+            rows.Add(new VenueOpenOrder(
+                symbol,
+                notional,
+                0m,
+                price > 0 ? price : null,
+                status,
+                orderId,
+                MarginModeText.ParseOrDefault(TryReadString(item, "marginType"), MarginMode.Unknown)));
         }
 
         return rows;
@@ -718,7 +856,17 @@ public sealed class AsterVenueAdapter : IPerpVenue, IHistoricalCandleProvider, I
 
             var notional = Math.Abs(qty) * (mark > 0m ? mark : entry);
             var pct = notional > 0m ? unrealized / notional * 100m : 0m;
-            rows.Add(new VenuePosition(symbol, qty, notional, leverage <= 0 ? 1m : leverage, entry, mark, pct, unrealized, 0m));
+            rows.Add(new VenuePosition(
+                symbol,
+                qty,
+                notional,
+                leverage <= 0 ? 1m : leverage,
+                entry,
+                mark,
+                pct,
+                unrealized,
+                0m,
+                MarginModeText.ParseOrDefault(TryReadString(item, "marginType"), MarginMode.Unknown)));
         }
 
         return rows;

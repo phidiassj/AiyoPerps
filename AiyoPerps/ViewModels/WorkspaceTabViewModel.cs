@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Linq;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -29,6 +30,9 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
     private readonly UserPreferenceRepository _userPreferenceRepository;
     private readonly TradingApiService? _tradingApiService;
     private readonly object _candleLock = new();
+    private readonly object _marketUiLock = new();
+    private readonly object _orderBookLock = new();
+    private readonly object _candlePersistStateLock = new();
     private readonly SemaphoreSlim _settingsReloadGate = new(1, 1);
     private readonly Channel<Candle> _candlePersistChannel = Channel.CreateUnbounded<Candle>(new UnboundedChannelOptions
     {
@@ -42,6 +46,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
     private Task? _marketPumpTask;
     private Task? _accountStatePumpTask;
     private Task? _candlePersistTask;
+    private Task? _marketUiLoopTask;
     private CancellationTokenSource? _marketPumpCts;
     private CancellationTokenSource? _accountStatePumpCts;
     private CancellationTokenSource? _apiSessionPumpCts;
@@ -55,6 +60,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
     private long? _apiSessionCursor;
     private Task? _apiSessionPumpTask;
     private DateTimeOffset _lastSharedLockToastAt;
+    private int _hasPendingMarketUiFlush;
 
     private AccountProfile? _selectedAccount;
     private bool _isConfigured;
@@ -71,6 +77,8 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
     private bool _isLimitOrderType;
     private bool _isShortOrderSide;
     private string _orderLeverage = "5";
+    private string _selectedMarginMode = "Cross";
+    private IReadOnlyList<string> _marginModeOptions = ["Cross", "Isolated"];
     private string _orderQuantity = "1";
     private string _relativeAmountUnit = "BTC";
     private string _selectedAmountUnit = "USD";
@@ -99,8 +107,49 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
     private readonly Dictionary<string, decimal> _pendingOrderLeverageHints = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _positionClosePriceInputs = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTimeOffset> _suppressedCanceledOrderIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTimeOffset> _lastCandlePersistAt = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTimeOffset> _lastCandlePersistOpenTime = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SortedDictionary<decimal, decimal> _liveOrderBookAsks = new();
+    private readonly SortedDictionary<decimal, decimal> _liveOrderBookBids = new(Comparer<decimal>.Create(static (left, right) => right.CompareTo(left)));
+    private readonly List<TradeTick> _pendingUiRecentTrades = [];
     private readonly HashSet<string> _closingSymbolsInFlight = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _closeSubmitLock = new();
+    private DateTimeOffset? _pendingUiEventTimestamp;
+    private decimal? _pendingUiMidPrice;
+    private string? _pendingUiSymbol;
+    private string? _pendingUiCandleStatus;
+    private bool _pendingUiCandleSeriesRefresh;
+    private bool _pendingUiOrderBookRefresh;
+    private bool _hasLiveOrderBook;
+    private long _marketUiFlushCount;
+    private long _marketUiQueuedTradeCount;
+    private long _marketUiQueuedOrderBookCount;
+    private long _candlePersistQueuedCount;
+    private long _candlePersistSkippedCount;
+    private long _candlePersistWrittenCount;
+    private DateTimeOffset _lastMarketMetricsLogAt;
+    private DateTimeOffset _lastKlineDataDiagnosticAt;
+    private DateTimeOffset _lastKlineUiDiagnosticAt;
+    private DateTimeOffset _lastPositionDiagnosticAt;
+    private DateTimeOffset _lastAccountDiagnosticAt;
+    private DateTimeOffset _lastOrderBookUiAppliedAt;
+    private DateTimeOffset _lastPositionUiAppliedAt;
+    private DateTimeOffset _lastBalanceUiAppliedAt;
+    private int _forceBalanceRefreshPending;
+    private const int MaxPendingUiRecentTrades = 32;
+    private static readonly TimeSpan MarketUiFlushInterval = TimeSpan.FromMilliseconds(33);
+    private static readonly TimeSpan OpenCandlePersistInterval = TimeSpan.FromMilliseconds(900);
+    private static readonly TimeSpan MarketMetricsLogInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan KlineDiagnosticSampleInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan OrderBookUiRefreshInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan PositionUiRefreshInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan PositionsOrdersSnapshotInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan BalanceSnapshotInterval = TimeSpan.FromSeconds(3);
+    private const long SlowKlineDataUpdateMs = 4;
+    private const long SlowKlineUiUpdateMs = 8;
+    private const long SlowPositionUpdateMs = 6;
+    private const long SlowAccountFetchMs = 250;
+    private const long SlowAccountApplyMs = 16;
 
     public WorkspaceTabViewModel(AccountStore accountStore, ObservableCollection<AccountProfile> sharedAccounts, IVenueFactory venueFactory, CandleRepository candleRepository, SymbolCatalogRepository symbolCatalogRepository, AppLogger logger, ToastService toastService, UserPreferenceRepository userPreferenceRepository, TradingApiService? tradingApiService = null)
     {
@@ -124,13 +173,19 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             _orderLeverage = savedLeverage;
         }
 
+        var savedMarginMode = NormalizeMarginMode(_userPreferenceRepository.GetOrderMarginModeOrDefault(_selectedMarginMode));
+        if (!string.IsNullOrWhiteSpace(savedMarginMode))
+        {
+            _selectedMarginMode = savedMarginMode;
+        }
+
         var savedQuantity = _userPreferenceRepository.GetOrderQuantityOrDefault(_orderQuantity);
         if (!string.IsNullOrWhiteSpace(savedQuantity))
         {
             _orderQuantity = savedQuantity;
         }
 
-        _logger.Info("WorkspaceTab", $"Order input restored leverage={_orderLeverage}, quantity={_orderQuantity}");
+        _logger.Info("WorkspaceTab", $"Order input restored leverage={_orderLeverage}, marginMode={_selectedMarginMode}, quantity={_orderQuantity}");
 
         ConfirmActivationCommand = new RelayCommand(
             _ => _ = ConfirmActivationAsync(),
@@ -158,8 +213,10 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
 
         L.PropertyChanged += OnLocalizationChanged;
         RefreshLocalizedOrderOptions();
+        RefreshMarginModeSupport();
         UpdateAmountUnitOptions(_symbol);
         _candlePersistTask = Task.Run(() => PersistCandlesLoopAsync(_cts.Token), _cts.Token);
+        _marketUiLoopTask = Task.Run(() => RunMarketUiLoopAsync(_cts.Token), _cts.Token);
     }
 
     public Guid TabId { get; }
@@ -190,6 +247,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             if (SetProperty(ref _selectedAccount, value))
             {
                 LoadSymbolOptions(value, autoSelectSymbol: true);
+                RefreshMarginModeSupport();
 
                 (ConfirmActivationCommand as RelayCommand)?.NotifyCanExecuteChanged();
             }
@@ -340,6 +398,22 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
     }
 
     public string[] OrderBookTickSizeOptions { get; } = ["1", "10", "100"];
+    public IReadOnlyList<string> MarginModeOptions
+    {
+        get => _marginModeOptions;
+        private set => SetProperty(ref _marginModeOptions, value);
+    }
+
+    public bool CanSelectMarginMode => MarginModeOptions.Count > 1;
+
+    public bool CanUseIsolatedMarginMode =>
+        MarginModeOptions.Any(x => string.Equals(x, "Isolated", StringComparison.Ordinal)) &&
+        IsIsolatedMarginModeEnabled(CurrentMarginModeVenueId);
+
+    public string MarginModeSupportText => ResolveMarginModeSupportText(CurrentMarginModeVenueId);
+    public bool CanUseRestingLimitClose => !string.Equals(CurrentMarginModeVenueId, "dYdX", StringComparison.OrdinalIgnoreCase);
+    public bool IsRestingLimitCloseUnavailable => !CanUseRestingLimitClose;
+    public string CloseLimitSupportText => ResolveCloseLimitSupportText(CurrentMarginModeVenueId);
 
     public string OrderType
     {
@@ -459,6 +533,45 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             {
                 PersistOrderLeverage(value);
                 RecalculateOrderEstimates();
+            }
+        }
+    }
+
+    public string SelectedMarginMode
+    {
+        get => _selectedMarginMode;
+        set
+        {
+            var next = CoerceMarginModeSelection(value, MarginModeOptions, CurrentMarginModeVenueId);
+            if (SetProperty(ref _selectedMarginMode, next))
+            {
+                _userPreferenceRepository.SaveOrderMarginMode(next);
+                RaisePropertyChanged(nameof(IsCrossMarginModeSelected));
+                RaisePropertyChanged(nameof(IsIsolatedMarginModeSelected));
+            }
+        }
+    }
+
+    public bool IsCrossMarginModeSelected
+    {
+        get => string.Equals(SelectedMarginMode, "Cross", StringComparison.Ordinal);
+        set
+        {
+            if (value)
+            {
+                SelectedMarginMode = "Cross";
+            }
+        }
+    }
+
+    public bool IsIsolatedMarginModeSelected
+    {
+        get => string.Equals(SelectedMarginMode, "Isolated", StringComparison.Ordinal);
+        set
+        {
+            if (value && CanUseIsolatedMarginMode)
+            {
+                SelectedMarginMode = "Isolated";
             }
         }
     }
@@ -765,6 +878,98 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         _userPreferenceRepository.SaveOrderQuantity(normalized);
     }
 
+    private static string NormalizeMarginMode(string? raw)
+    {
+        return MarginModeText.ParseOrDefault(raw, MarginMode.Cross) == MarginMode.Isolated
+            ? "Isolated"
+            : "Cross";
+    }
+
+    private string CurrentMarginModeVenueId =>
+        SelectedAccount?.VenueId ??
+        Binding?.VenueId ??
+        _venue?.VenueId ??
+        string.Empty;
+
+    private void RefreshMarginModeSupport()
+    {
+        var options = ResolveMarginModeOptions(CurrentMarginModeVenueId);
+        MarginModeOptions = options;
+
+        var next = CoerceMarginModeSelection(_selectedMarginMode, options, CurrentMarginModeVenueId);
+        if (!string.Equals(_selectedMarginMode, next, StringComparison.Ordinal))
+        {
+            _selectedMarginMode = next;
+            _userPreferenceRepository.SaveOrderMarginMode(next);
+            RaisePropertyChanged(nameof(SelectedMarginMode));
+            RaisePropertyChanged(nameof(IsCrossMarginModeSelected));
+            RaisePropertyChanged(nameof(IsIsolatedMarginModeSelected));
+        }
+
+        RaisePropertyChanged(nameof(CanSelectMarginMode));
+        RaisePropertyChanged(nameof(CanUseIsolatedMarginMode));
+        RaisePropertyChanged(nameof(MarginModeSupportText));
+        RaisePropertyChanged(nameof(CanUseRestingLimitClose));
+        RaisePropertyChanged(nameof(IsRestingLimitCloseUnavailable));
+        RaisePropertyChanged(nameof(CloseLimitSupportText));
+    }
+
+    private static string CoerceMarginModeSelection(string? raw, IReadOnlyList<string> options, string? venueId)
+    {
+        var normalized = NormalizeMarginMode(raw);
+        if (options.Any(x => string.Equals(x, normalized, StringComparison.Ordinal)) &&
+            IsMarginModeSelectable(normalized, venueId))
+        {
+            return normalized;
+        }
+
+        return options.FirstOrDefault(x => IsMarginModeSelectable(x, venueId)) ?? "Cross";
+    }
+
+    private static IReadOnlyList<string> ResolveMarginModeOptions(string? venueId)
+    {
+        return (venueId ?? string.Empty).Trim() switch
+        {
+            "BitMEX" => ["Cross", "Isolated"],
+            "Hyperliquid" => ["Cross", "Isolated"],
+            "Aster" => ["Cross", "Isolated"],
+            "GRVT" => ["Cross", "Isolated"],
+            "dYdX" => ["Cross", "Isolated"],
+            _ => ["Cross", "Isolated"]
+        };
+    }
+
+    private static bool IsIsolatedMarginModeEnabled(string? venueId)
+    {
+        return !string.Equals((venueId ?? string.Empty).Trim(), "dYdX", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsMarginModeSelectable(string? marginMode, string? venueId)
+    {
+        var normalized = NormalizeMarginMode(marginMode);
+        return !string.Equals(normalized, "Isolated", StringComparison.Ordinal) || IsIsolatedMarginModeEnabled(venueId);
+    }
+
+    private string ResolveMarginModeSupportText(string? venueId)
+    {
+        return (venueId ?? string.Empty).Trim() switch
+        {
+            "BitMEX" => L["OrderPanel_MarginModeHint_BitMEX"],
+            "Hyperliquid" => L["OrderPanel_MarginModeHint_Hyperliquid"],
+            "Aster" => L["OrderPanel_MarginModeHint_Aster"],
+            "GRVT" => L["OrderPanel_MarginModeHint_GRVT"],
+            "dYdX" => L["OrderPanel_MarginModeHint_dYdX"],
+            _ => L["OrderPanel_MarginModeHint_Default"]
+        };
+    }
+
+    private string ResolveCloseLimitSupportText(string? venueId)
+    {
+        return string.Equals((venueId ?? string.Empty).Trim(), "dYdX", StringComparison.OrdinalIgnoreCase)
+            ? L["Position_Close_Limit_Hint_dYdX"]
+            : string.Empty;
+    }
+
     public void ApplyViewport(double width, double height)
     {
         IsOrderBookVisible = _viewportService.IsOrderBookVisible(width);
@@ -782,6 +987,8 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
 
         NotifyLocalizationChanged();
         RefreshLocalizedOrderOptions();
+        RaisePropertyChanged(nameof(MarginModeSupportText));
+        RaisePropertyChanged(nameof(CloseLimitSupportText));
     }
 
     private void NotifySharedSessionLocked()
@@ -924,6 +1131,12 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             return grvtDefault ?? symbols.FirstOrDefault() ?? "BTC_USDT_Perp";
         }
 
+        if (string.Equals(account.VenueId, "dYdX", StringComparison.OrdinalIgnoreCase))
+        {
+            var dydxDefault = symbols.FirstOrDefault(x => string.Equals(x, "BTC-USD", StringComparison.OrdinalIgnoreCase));
+            return dydxDefault ?? symbols.FirstOrDefault() ?? "BTC-USD";
+        }
+
         return symbols.FirstOrDefault() ?? currentSymbol;
     }
 
@@ -1009,12 +1222,16 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
 
                     HandleTradeTick(Binding.VenueId, streamSymbol, tick);
                 }
-
-                Dispatcher.UIThread.Post(() =>
+                else if (marketEvent is OrderBookSnapshot snapshot)
                 {
-                    LastMarketEventAt = marketEvent.Timestamp;
-                    ConnectionStatus = $"Connected ({_venue.VenueId})";
-                });
+                    HandleOrderBookSnapshot(snapshot);
+                }
+                else if (marketEvent is OrderBookDelta delta)
+                {
+                    HandleOrderBookDelta(delta);
+                }
+
+                QueueMarketHeartbeat(marketEvent.Timestamp);
             }
         }
         catch (OperationCanceledException)
@@ -1057,25 +1274,27 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             return;
         }
 
+        var marginMode = MarginModeText.ParseOrDefault(SelectedMarginMode, MarginMode.Cross);
+
         try
         {
-            _logger.Info("WorkspaceTab", $"ConfigureLeverage start tabId={TabId}, symbol={Symbol}, leverage={leverage}");
-            var configure = await _venue.ConfigureLeverageAsync(Symbol, leverage, _cts.Token);
+            _logger.Info("WorkspaceTab", $"ConfigureLeverage start tabId={TabId}, symbol={Symbol}, leverage={leverage}, marginMode={marginMode.ToApiValue()}");
+            var configure = await _venue.ConfigureLeverageAsync(Symbol, leverage, marginMode, _cts.Token);
             if (!configure.IsSuccess)
             {
                 LastOrderResult = $"下單失敗：{configure.Message}";
                 _toastService.ShowError(configure.Message);
-                _logger.Warn("WorkspaceTab", $"ConfigureLeverage failed tabId={TabId}, symbol={Symbol}, leverage={leverage}, msg={configure.Message}");
+                _logger.Warn("WorkspaceTab", $"ConfigureLeverage failed tabId={TabId}, symbol={Symbol}, leverage={leverage}, marginMode={marginMode.ToApiValue()}, msg={configure.Message}");
                 return;
             }
 
-            _logger.Info("WorkspaceTab", $"ConfigureLeverage done tabId={TabId}, symbol={Symbol}, leverage={leverage}");
+            _logger.Info("WorkspaceTab", $"ConfigureLeverage done tabId={TabId}, symbol={Symbol}, leverage={leverage}, marginMode={marginMode.ToApiValue()}");
         }
         catch (Exception ex)
         {
             LastOrderResult = $"下單失敗：{ex.Message}";
             _toastService.ShowError(ex.Message);
-            _logger.Error("WorkspaceTab", $"ConfigureLeverage exception tabId={TabId}, symbol={Symbol}, leverage={leverage}", ex);
+            _logger.Error("WorkspaceTab", $"ConfigureLeverage exception tabId={TabId}, symbol={Symbol}, leverage={leverage}, marginMode={marginMode.ToApiValue()}", ex);
             return;
         }
 
@@ -1124,11 +1343,12 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             leverage,
             price,
             "送單中",
-            null));
+            null,
+            marginMode));
 
         try
         {
-            _logger.Info("WorkspaceTab", $"PlaceOrder start tabId={TabId}, symbol={Symbol}, side={OrderSide}, type={OrderType}, amountInput={OrderQuantity}, unit={SelectedAmountUnit}, baseQty={baseQuantity}, notionalUsd={notionalUsd}, price={OrderPrice}");
+            _logger.Info("WorkspaceTab", $"PlaceOrder start tabId={TabId}, symbol={Symbol}, side={OrderSide}, type={OrderType}, marginMode={marginMode.ToApiValue()}, amountInput={OrderQuantity}, unit={SelectedAmountUnit}, baseQty={baseQuantity}, notionalUsd={notionalUsd}, price={OrderPrice}");
             var venueSide = _isShortOrderSide ? "Sell" : "Buy";
             var ack = await _venue.PlaceOrderAsync(Symbol, venueSide, baseQuantity, price, _cts.Token);
             LastOrderResult = ack.Success
@@ -1146,7 +1366,8 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
                         leverage,
                         price,
                         "已送出待同步",
-                        ack.ClientOrderId));
+                        ack.ClientOrderId,
+                        marginMode));
                 }
                 else
                 {
@@ -1164,7 +1385,8 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
                     leverage,
                     price,
                     $"送出失敗：{ack.Message ?? "unknown"}",
-                    ack.ClientOrderId));
+                    ack.ClientOrderId,
+                    marginMode));
                 _toastService.ShowError($"{L["Toast_OrderFailed"]}{ack.Message}");
             }
 
@@ -1182,7 +1404,8 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
                 leverage,
                 price,
                 $"送單例外：{ex.Message}",
-                null));
+                null,
+                marginMode));
             RemovePendingOrder(localOrderId, onlyIfStatusMatches: "送單中");
             _ = RefreshAccountStateOnceAsync();
             _toastService.ShowError($"{L["Toast_OrderException"]}{ex.Message}");
@@ -1204,6 +1427,8 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             return;
         }
 
+        var marginMode = MarginModeText.ParseOrDefault(SelectedMarginMode, MarginMode.Cross);
+
         decimal? price = null;
         if (IsLimitOrder)
         {
@@ -1224,7 +1449,8 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             leverage,
             price,
             "送單中",
-            null));
+            null,
+            marginMode));
 
         try
         {
@@ -1240,14 +1466,15 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
                     leverage,
                     qty,
                     unit,
-                    price),
+                    price,
+                    marginMode.ToApiValue()),
                 _cts.Token);
 
             LastOrderResult = "下單成功";
             RemovePendingOrder(localOrderId);
             _toastService.ShowInfo(L["Toast_OrderSuccess"]);
             _ = RefreshAccountStateOnceAsync();
-            _logger.Info("WorkspaceTab", $"PlaceOrder(API shared) done tabId={TabId}, symbol={Symbol}, side={side}, type={orderType}, result={result}");
+            _logger.Info("WorkspaceTab", $"PlaceOrder(API shared) done tabId={TabId}, symbol={Symbol}, side={side}, type={orderType}, marginMode={marginMode.ToApiValue()}, result={result}");
         }
         catch (Exception ex)
         {
@@ -1259,7 +1486,8 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
                 leverage,
                 price,
                 $"送出失敗：{ex.Message}",
-                null));
+                null,
+                marginMode));
             RemovePendingOrder(localOrderId, onlyIfStatusMatches: "送單中");
             _toastService.ShowError($"{L["Toast_OrderFailed"]}{ex.Message}");
             _ = RefreshAccountStateOnceAsync();
@@ -1269,9 +1497,24 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
 
     private void UpdateCandleSeriesFromCache()
     {
+        var diagnosticSample = ShouldSampleKlineDiagnostic(ref _lastKlineUiDiagnosticAt);
+        if (diagnosticSample)
+        {
+            _logger.Info("KlineDiag", $"series rebuild begin tabId={TabId}, symbol={Symbol}, interval={SelectedInterval}");
+        }
+
+        var stopwatch = Stopwatch.StartNew();
         if (Binding is null)
         {
             CandleSeries = Array.Empty<CandleViewPoint>();
+            stopwatch.Stop();
+            LogKlineDiagnosticIfNeeded(
+                "series rebuild end",
+                stopwatch.ElapsedMilliseconds,
+                diagnosticSample,
+                SlowKlineUiUpdateMs,
+                ref _lastKlineUiDiagnosticAt,
+                $"tabId={TabId}, symbol={Symbol}, interval={SelectedInterval}, points=0, binding=null");
             return;
         }
 
@@ -1279,13 +1522,18 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         lock (_candleLock)
         {
             var interval = ParseInterval(SelectedInterval);
-            points = _candleCache.Get(Binding.VenueId, Symbol, interval)
-                .TakeLast(600)
-                .Select(x => new CandleViewPoint(x.OpenTime, x.Open, x.High, x.Low, x.Close))
-                .ToList();
+            points = _candleCache.GetTailViewPoints(Binding.VenueId, Symbol, interval, 600);
         }
 
         CandleSeries = points;
+        stopwatch.Stop();
+        LogKlineDiagnosticIfNeeded(
+            "series rebuild end",
+            stopwatch.ElapsedMilliseconds,
+            diagnosticSample,
+            SlowKlineUiUpdateMs,
+            ref _lastKlineUiDiagnosticAt,
+            $"tabId={TabId}, symbol={Symbol}, interval={SelectedInterval}, points={points.Count}, lastOpen={(points.Count > 0 ? points[^1].OpenTime.ToString("O") : "none")}");
     }
 
     public void Dispose()
@@ -1320,6 +1568,18 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             }
         }
 
+        if (_marketUiLoopTask is not null)
+        {
+            try
+            {
+                await _marketUiLoopTask.WaitAsync(TimeSpan.FromSeconds(3));
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn("WorkspaceTab", $"Dispose market UI wait warning tabId={TabId}: {ex.Message}");
+            }
+        }
+
         if (_venue is not null)
         {
             try
@@ -1348,6 +1608,10 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         _ = StopApiSessionPumpAsync();
         _marketPumpCts?.Cancel();
         _marketPumpCts?.Dispose();
+        ResetLiveOrderBook();
+        ResetPendingMarketUiState();
+        ResetMarketMetricCounters();
+        ResetRefreshCadenceState();
         _marketPumpCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
         _marketPumpTask = PumpMarketEventsAsync(_marketPumpCts.Token);
         _logger.Info("WorkspaceTab", $"Market pump started tabId={TabId}, symbol={_marketStreamSymbol}");
@@ -1359,12 +1623,13 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         _accountStatePumpCts?.Cancel();
         _accountStatePumpCts?.Dispose();
         _accountStatePumpTask = null;
+        ResetRefreshCadenceState();
 
         if (_venue is not IAccountStateProvider provider)
         {
             _logger.Info("WorkspaceTab", $"Account state provider unavailable tabId={TabId}, venue={_venue?.VenueId}");
             Dispatcher.UIThread.Post(() =>
-                ApplyAccountSnapshot(new VenueAccountSnapshot(DateTimeOffset.UtcNow, [], [], [])));
+                ApplyAccountSnapshot(new VenueAccountSnapshot(DateTimeOffset.UtcNow, [], [], []), AccountSnapshotSections.All));
             return;
         }
 
@@ -1377,6 +1642,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
     {
         _apiSessionPumpCts?.Cancel();
         _apiSessionPumpCts?.Dispose();
+        ResetRefreshCadenceState();
         _apiSessionPumpCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
         _apiSessionPumpTask = PumpApiSessionAsync(_apiSessionPumpCts.Token);
         _logger.Info("WorkspaceTab", $"API session pump started tabId={TabId}, symbol={Symbol}");
@@ -1405,6 +1671,9 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         _marketPumpCts.Dispose();
         _marketPumpCts = null;
         _marketPumpTask = null;
+        ResetLiveOrderBook();
+        ResetPendingMarketUiState();
+        ResetRefreshCadenceState();
         _logger.Info("WorkspaceTab", $"Market pump stopped tabId={TabId}");
     }
 
@@ -1431,6 +1700,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         _accountStatePumpCts.Dispose();
         _accountStatePumpCts = null;
         _accountStatePumpTask = null;
+        ResetRefreshCadenceState();
         _logger.Info("WorkspaceTab", $"Account state pump stopped tabId={TabId}");
     }
 
@@ -1457,6 +1727,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         _apiSessionPumpCts.Dispose();
         _apiSessionPumpCts = null;
         _apiSessionPumpTask = null;
+        ResetRefreshCadenceState();
         _logger.Info("WorkspaceTab", $"API session pump stopped tabId={TabId}");
     }
 
@@ -1467,11 +1738,32 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         {
             try
             {
-                var snapshot = await provider.GetAccountSnapshotAsync(cancellationToken);
-                Dispatcher.UIThread.Post(() => ApplyAccountSnapshot(snapshot));
+                var includeBalances = ShouldRefreshBalances();
+                var sections = includeBalances
+                    ? AccountSnapshotSections.Positions | AccountSnapshotSections.Orders | AccountSnapshotSections.Balances
+                    : AccountSnapshotSections.Positions | AccountSnapshotSections.Orders;
+                var diagnosticSample = ShouldSampleAccountDiagnostic(ref _lastAccountDiagnosticAt);
+                if (diagnosticSample)
+                {
+                    _logger.Info(
+                        "AccountDiag",
+                        $"provider snapshot begin tabId={TabId}, symbol={Symbol}, provider={provider.GetType().Name}, sections={sections}, includeBalances={includeBalances}");
+                }
+
+                var stopwatch = Stopwatch.StartNew();
+                var snapshot = await provider.GetAccountSnapshotAsync(sections, cancellationToken);
+                stopwatch.Stop();
+                LogAccountDiagnosticIfNeeded(
+                    "provider snapshot end",
+                    stopwatch.ElapsedMilliseconds,
+                    diagnosticSample,
+                    SlowAccountFetchMs,
+                    ref _lastAccountDiagnosticAt,
+                    $"tabId={TabId}, symbol={Symbol}, provider={provider.GetType().Name}, sections={sections}, includeBalances={includeBalances}, positions={snapshot.Positions.Count}, orders={snapshot.OpenOrders.Count}, balances={snapshot.Balances.Count}");
+                Dispatcher.UIThread.Post(() => ApplyAccountSnapshot(snapshot, sections));
                 if (loop % 10 == 0)
                 {
-                    _logger.Info("WorkspaceTab", $"Account snapshot tabId={TabId}, positions={snapshot.Positions.Count}, orders={snapshot.OpenOrders.Count}, balances={snapshot.Balances.Count}");
+                    _logger.Info("WorkspaceTab", $"Account snapshot tabId={TabId}, positions={snapshot.Positions.Count}, orders={snapshot.OpenOrders.Count}, balances={snapshot.Balances.Count}, includeBalances={includeBalances}");
                 }
             }
             catch (OperationCanceledException)
@@ -1486,7 +1778,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             loop++;
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(4), cancellationToken);
+                await Task.Delay(PositionsOrdersSnapshotInterval, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -1495,14 +1787,34 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         }
     }
 
-    private async Task RefreshAccountStateOnceAsync()
+    private async Task RefreshAccountStateOnceAsync(bool forceBalances = true)
     {
+        if (forceBalances)
+        {
+            RequestBalanceRefresh();
+        }
+
         if (_isApiSessionManaged && _tradingApiService is not null && _apiSessionAccountId.HasValue)
         {
             try
             {
-                var snapshot = await FetchApiSnapshotAsync(_apiSessionAccountId.Value, Symbol, _cts.Token);
-                Dispatcher.UIThread.Post(() => ApplyAccountSnapshot(snapshot));
+                var diagnosticSample = ShouldSampleAccountDiagnostic(ref _lastAccountDiagnosticAt);
+                if (diagnosticSample)
+                {
+                    _logger.Info("AccountDiag", $"on-demand api snapshot begin tabId={TabId}, symbol={Symbol}, sections={AccountSnapshotSections.All}");
+                }
+
+                var stopwatch = Stopwatch.StartNew();
+                var snapshot = await FetchApiSnapshotAsync(_apiSessionAccountId.Value, Symbol, AccountSnapshotSections.All, _cts.Token);
+                stopwatch.Stop();
+                LogAccountDiagnosticIfNeeded(
+                    "on-demand api snapshot end",
+                    stopwatch.ElapsedMilliseconds,
+                    diagnosticSample,
+                    SlowAccountFetchMs,
+                    ref _lastAccountDiagnosticAt,
+                    $"tabId={TabId}, symbol={Symbol}, sections={AccountSnapshotSections.All}, positions={snapshot.Positions.Count}, orders={snapshot.OpenOrders.Count}, balances={snapshot.Balances.Count}");
+                Dispatcher.UIThread.Post(() => ApplyAccountSnapshot(snapshot, AccountSnapshotSections.All));
                 _logger.Info("WorkspaceTab", $"Account snapshot on-demand (API shared) tabId={TabId}, positions={snapshot.Positions.Count}, orders={snapshot.OpenOrders.Count}, balances={snapshot.Balances.Count}");
             }
             catch (Exception ex)
@@ -1520,14 +1832,319 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
 
         try
         {
-            var snapshot = await provider.GetAccountSnapshotAsync(_cts.Token);
-            Dispatcher.UIThread.Post(() => ApplyAccountSnapshot(snapshot));
+            var diagnosticSample = ShouldSampleAccountDiagnostic(ref _lastAccountDiagnosticAt);
+            if (diagnosticSample)
+            {
+                _logger.Info("AccountDiag", $"on-demand provider snapshot begin tabId={TabId}, symbol={Symbol}, provider={provider.GetType().Name}, sections={AccountSnapshotSections.All}");
+            }
+
+            var stopwatch = Stopwatch.StartNew();
+            var snapshot = await provider.GetAccountSnapshotAsync(AccountSnapshotSections.All, _cts.Token);
+            stopwatch.Stop();
+            LogAccountDiagnosticIfNeeded(
+                "on-demand provider snapshot end",
+                stopwatch.ElapsedMilliseconds,
+                diagnosticSample,
+                SlowAccountFetchMs,
+                ref _lastAccountDiagnosticAt,
+                $"tabId={TabId}, symbol={Symbol}, provider={provider.GetType().Name}, sections={AccountSnapshotSections.All}, positions={snapshot.Positions.Count}, orders={snapshot.OpenOrders.Count}, balances={snapshot.Balances.Count}");
+            Dispatcher.UIThread.Post(() => ApplyAccountSnapshot(snapshot, AccountSnapshotSections.All));
             _logger.Info("WorkspaceTab", $"Account snapshot on-demand tabId={TabId}, positions={snapshot.Positions.Count}, orders={snapshot.OpenOrders.Count}, balances={snapshot.Balances.Count}");
         }
         catch (Exception ex)
         {
             _logger.Warn("WorkspaceTab", $"Account snapshot on-demand failed tabId={TabId}: {ex.Message}");
         }
+    }
+
+    private async Task RunMarketUiLoopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(MarketUiFlushInterval, cancellationToken);
+                if (Interlocked.Exchange(ref _hasPendingMarketUiFlush, 0) == 0)
+                {
+                    continue;
+                }
+
+                await Dispatcher.UIThread.InvokeAsync(FlushPendingMarketUiUpdates, DispatcherPriority.Render, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.Info("WorkspaceTab", $"Market UI loop canceled tabId={TabId}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("WorkspaceTab", $"Market UI loop failed tabId={TabId}", ex);
+        }
+    }
+
+    private void QueueMarketHeartbeat(DateTimeOffset timestamp)
+    {
+        lock (_marketUiLock)
+        {
+            if (!_pendingUiEventTimestamp.HasValue || timestamp > _pendingUiEventTimestamp.Value)
+            {
+                _pendingUiEventTimestamp = timestamp;
+            }
+        }
+
+        Interlocked.Exchange(ref _hasPendingMarketUiFlush, 1);
+    }
+
+    private void ResetMarketMetricCounters()
+    {
+        Interlocked.Exchange(ref _marketUiFlushCount, 0);
+        Interlocked.Exchange(ref _marketUiQueuedTradeCount, 0);
+        Interlocked.Exchange(ref _marketUiQueuedOrderBookCount, 0);
+        Interlocked.Exchange(ref _candlePersistQueuedCount, 0);
+        Interlocked.Exchange(ref _candlePersistSkippedCount, 0);
+        Interlocked.Exchange(ref _candlePersistWrittenCount, 0);
+        _lastMarketMetricsLogAt = DateTimeOffset.MinValue;
+    }
+
+    private void ResetRefreshCadenceState()
+    {
+        _lastOrderBookUiAppliedAt = DateTimeOffset.MinValue;
+        _lastPositionUiAppliedAt = DateTimeOffset.MinValue;
+        _lastBalanceUiAppliedAt = DateTimeOffset.MinValue;
+        Interlocked.Exchange(ref _forceBalanceRefreshPending, 0);
+    }
+
+    private void RequestBalanceRefresh()
+    {
+        Interlocked.Exchange(ref _forceBalanceRefreshPending, 1);
+    }
+
+    private bool ShouldRefreshBalances()
+    {
+        return ShouldRefreshBalances(DateTimeOffset.UtcNow);
+    }
+
+    private bool ShouldRefreshBalances(DateTimeOffset now)
+    {
+        if (Interlocked.Exchange(ref _forceBalanceRefreshPending, 0) == 1)
+        {
+            _lastBalanceUiAppliedAt = now;
+            return true;
+        }
+
+        if (now - _lastBalanceUiAppliedAt < BalanceSnapshotInterval)
+        {
+            return false;
+        }
+
+        _lastBalanceUiAppliedAt = now;
+        return true;
+    }
+
+    private void FlushPendingMarketUiUpdates()
+    {
+        var diagnosticSample = ShouldSampleKlineDiagnostic(ref _lastKlineUiDiagnosticAt);
+        if (diagnosticSample)
+        {
+            _logger.Info("KlineDiag", $"ui flush begin tabId={TabId}, symbol={Symbol}, interval={SelectedInterval}");
+        }
+
+        var flushStopwatch = Stopwatch.StartNew();
+        DateTimeOffset? pendingTimestamp;
+        decimal? pendingMidPrice;
+        string? pendingSymbol;
+        string? pendingCandleStatus;
+        bool refreshCandleSeries;
+        bool refreshOrderBook;
+        int pendingQueueDepth;
+        List<TradeTick> pendingTrades;
+        lock (_marketUiLock)
+        {
+            pendingTimestamp = _pendingUiEventTimestamp;
+            pendingMidPrice = _pendingUiMidPrice;
+            pendingSymbol = _pendingUiSymbol;
+            pendingCandleStatus = _pendingUiCandleStatus;
+            refreshCandleSeries = _pendingUiCandleSeriesRefresh;
+            refreshOrderBook = _pendingUiOrderBookRefresh;
+            pendingTrades = _pendingUiRecentTrades.Count == 0 ? [] : [.. _pendingUiRecentTrades];
+            pendingQueueDepth = _pendingUiRecentTrades.Count;
+
+            _pendingUiEventTimestamp = null;
+            _pendingUiMidPrice = null;
+            _pendingUiSymbol = null;
+            _pendingUiCandleStatus = null;
+            _pendingUiCandleSeriesRefresh = false;
+            _pendingUiOrderBookRefresh = false;
+            _pendingUiRecentTrades.Clear();
+        }
+
+        if (pendingTimestamp.HasValue)
+        {
+            LastMarketEventAt = pendingTimestamp;
+            var venueId = _venue?.VenueId ?? Binding?.VenueId;
+            if (!string.IsNullOrWhiteSpace(venueId))
+            {
+                ConnectionStatus = $"Connected ({venueId})";
+            }
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var midPrice = pendingMidPrice ?? TryGetLiveOrderBookMidPrice() ?? _lastMidPrice;
+        var shouldRefreshOrderBook = refreshOrderBook;
+        if (!shouldRefreshOrderBook && pendingMidPrice.HasValue && ShouldRefreshSyntheticOrderBook())
+        {
+            shouldRefreshOrderBook = true;
+        }
+
+        if (shouldRefreshOrderBook &&
+            midPrice.HasValue &&
+            midPrice.Value > 0 &&
+            now - _lastOrderBookUiAppliedAt >= OrderBookUiRefreshInterval)
+        {
+            UpdateOrderBookSnapshot(midPrice.Value);
+            _lastOrderBookUiAppliedAt = now;
+        }
+
+        if (!string.IsNullOrWhiteSpace(pendingSymbol) &&
+            pendingMidPrice.HasValue &&
+            pendingMidPrice.Value > 0 &&
+            now - _lastPositionUiAppliedAt >= PositionUiRefreshInterval)
+        {
+            UpdatePositionMarks(pendingSymbol, pendingMidPrice.Value);
+            _lastPositionUiAppliedAt = now;
+        }
+
+        if (pendingTrades.Count > 0)
+        {
+            foreach (var trade in pendingTrades.OrderBy(x => x.Timestamp))
+            {
+                AppendRecentTrade(trade);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(pendingCandleStatus))
+        {
+            CandleStatus = pendingCandleStatus;
+        }
+
+        long candleSeriesRefreshElapsedMs = 0;
+        if (refreshCandleSeries)
+        {
+            var seriesStopwatch = Stopwatch.StartNew();
+            UpdateCandleSeriesFromCache();
+            seriesStopwatch.Stop();
+            candleSeriesRefreshElapsedMs = seriesStopwatch.ElapsedMilliseconds;
+        }
+
+        flushStopwatch.Stop();
+        Interlocked.Increment(ref _marketUiFlushCount);
+        LogMarketMetricsIfNeeded(pendingQueueDepth, pendingTrades.Count, shouldRefreshOrderBook, refreshCandleSeries);
+        LogKlineDiagnosticIfNeeded(
+            "ui flush end",
+            flushStopwatch.ElapsedMilliseconds,
+            diagnosticSample,
+            SlowKlineUiUpdateMs,
+            ref _lastKlineUiDiagnosticAt,
+            $"tabId={TabId}, symbol={Symbol}, interval={SelectedInterval}, refreshCandleSeries={refreshCandleSeries}, candleSeriesMs={candleSeriesRefreshElapsedMs}, refreshOrderBook={shouldRefreshOrderBook}, trades={pendingTrades.Count}, queueDepth={pendingQueueDepth}, candleStatusPending={!string.IsNullOrWhiteSpace(pendingCandleStatus)}");
+    }
+
+    private bool ShouldSampleKlineDiagnostic(ref DateTimeOffset lastAt)
+    {
+        if (!_logger.IsDevelopment)
+        {
+            return false;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - lastAt < KlineDiagnosticSampleInterval)
+        {
+            return false;
+        }
+
+        lastAt = now;
+        return true;
+    }
+
+    private bool ShouldSampleAccountDiagnostic(ref DateTimeOffset lastAt)
+    {
+        return ShouldSampleKlineDiagnostic(ref lastAt);
+    }
+
+    private void LogKlineDiagnosticIfNeeded(
+        string phase,
+        long elapsedMs,
+        bool sampled,
+        long slowThresholdMs,
+        ref DateTimeOffset lastAt,
+        string details)
+    {
+        if (!_logger.IsDevelopment)
+        {
+            return;
+        }
+
+        if (!sampled && elapsedMs < slowThresholdMs)
+        {
+            return;
+        }
+
+        if (!sampled)
+        {
+            lastAt = DateTimeOffset.UtcNow;
+        }
+
+        _logger.Info("KlineDiag", $"{phase} elapsedMs={elapsedMs}, {details}");
+    }
+
+    private void LogAccountDiagnosticIfNeeded(
+        string phase,
+        long elapsedMs,
+        bool sampled,
+        long slowThresholdMs,
+        ref DateTimeOffset lastAt,
+        string details)
+    {
+        if (!_logger.IsDevelopment)
+        {
+            return;
+        }
+
+        if (!sampled && elapsedMs < slowThresholdMs)
+        {
+            return;
+        }
+
+        if (!sampled)
+        {
+            lastAt = DateTimeOffset.UtcNow;
+        }
+
+        _logger.Info("AccountDiag", $"{phase} elapsedMs={elapsedMs}, {details}");
+    }
+
+    private void LogMarketMetricsIfNeeded(int queueDepth, int flushedTradeCount, bool refreshedOrderBook, bool refreshedCandleSeries)
+    {
+        if (!_logger.IsDevelopment)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastMarketMetricsLogAt < MarketMetricsLogInterval)
+        {
+            return;
+        }
+
+        _lastMarketMetricsLogAt = now;
+        var flushCount = Interlocked.Read(ref _marketUiFlushCount);
+        var queuedTrades = Interlocked.Read(ref _marketUiQueuedTradeCount);
+        var queuedOrderBooks = Interlocked.Read(ref _marketUiQueuedOrderBookCount);
+        var candleQueued = Interlocked.Read(ref _candlePersistQueuedCount);
+        var candleSkipped = Interlocked.Read(ref _candlePersistSkippedCount);
+        var candleWritten = Interlocked.Read(ref _candlePersistWrittenCount);
+        _logger.Info(
+            "WorkspaceTab",
+            $"Market metrics tabId={TabId}, symbol={Symbol}, flushes={flushCount}, queueDepth={queueDepth}, flushedTrades={flushedTradeCount}, queuedTrades={queuedTrades}, queuedOrderBooks={queuedOrderBooks}, refreshedOrderBook={refreshedOrderBook}, refreshedCandleSeries={refreshedCandleSeries}, candlePersistQueued={candleQueued}, candlePersistWritten={candleWritten}, candlePersistSkipped={candleSkipped}");
     }
 
     private async Task PersistCandlesLoopAsync(CancellationToken cancellationToken)
@@ -1537,6 +2154,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             await foreach (var candle in _candlePersistChannel.Reader.ReadAllAsync(cancellationToken))
             {
                 _candleRepository.Upsert(candle);
+                Interlocked.Increment(ref _candlePersistWrittenCount);
             }
         }
         catch (OperationCanceledException)
@@ -1621,7 +2239,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         var accountId = _apiSessionAccountId.Value;
         var symbol = Symbol;
         var interval = SelectedInterval;
-        var loop = 0;
+        var lastPositionsOrdersSnapshotAt = DateTimeOffset.MinValue;
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -1630,10 +2248,23 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
                 var market = await _tradingApiService.GetMarketDataAsync(accountId, symbol, interval, _apiSessionCursor, cancellationToken);
                 ApplyApiMarketData(Binding.VenueId, symbol, interval, market);
 
-                if (loop % 4 == 0)
+                var now = DateTimeOffset.UtcNow;
+                var sections = AccountSnapshotSections.None;
+                if (now - lastPositionsOrdersSnapshotAt >= PositionsOrdersSnapshotInterval)
                 {
-                    var snapshot = await FetchApiSnapshotAsync(accountId, symbol, cancellationToken);
-                    Dispatcher.UIThread.Post(() => ApplyAccountSnapshot(snapshot));
+                    sections |= AccountSnapshotSections.Positions | AccountSnapshotSections.Orders;
+                    lastPositionsOrdersSnapshotAt = now;
+                }
+
+                if (ShouldRefreshBalances(now))
+                {
+                    sections |= AccountSnapshotSections.Balances;
+                }
+
+                if (sections != AccountSnapshotSections.None)
+                {
+                    var snapshot = await FetchApiSnapshotAsync(accountId, symbol, sections, cancellationToken);
+                    Dispatcher.UIThread.Post(() => ApplyAccountSnapshot(snapshot, sections));
                 }
             }
             catch (OperationCanceledException)
@@ -1646,7 +2277,6 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
                 Dispatcher.UIThread.Post(() => ConnectionStatus = $"Error: {ex.Message}");
             }
 
-            loop++;
             try
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(700), cancellationToken);
@@ -1693,29 +2323,73 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         _apiSessionCursor = market.Cursor;
         Dispatcher.UIThread.Post(() =>
         {
-            LastMarketEventAt = DateTimeOffset.UtcNow;
-            ConnectionStatus = $"Connected ({Binding?.VenueId} shared)";
             if (market.LatestPrice.HasValue && market.LatestPrice.Value > 0)
             {
-                UpdateOrderBookSnapshot(market.LatestPrice.Value);
-                UpdatePositionMarks(symbol, market.LatestPrice.Value);
+                QueueMarketPriceUiUpdate(symbol, market.LatestPrice.Value);
             }
 
-            CandleStatus = _currentCandle is null ? "尚無 K 線資料" : FormatCandleStatus(_currentCandle);
-            UpdateCandleSeriesFromCache();
+            if (_currentCandle is not null)
+            {
+                QueueCandleUiUpdate(_currentCandle);
+            }
+
+            QueueMarketHeartbeat(DateTimeOffset.UtcNow);
         });
     }
 
-    private async Task<VenueAccountSnapshot> FetchApiSnapshotAsync(Guid accountId, string symbol, CancellationToken cancellationToken)
+    private async Task<VenueAccountSnapshot> FetchApiSnapshotAsync(Guid accountId, string symbol, AccountSnapshotSections sections, CancellationToken cancellationToken)
     {
         if (_tradingApiService is null)
         {
             return new VenueAccountSnapshot(DateTimeOffset.UtcNow, [], [], []);
         }
 
-        var positions = await _tradingApiService.ListPositionsAsync(accountId, symbol, cancellationToken);
-        var orders = await _tradingApiService.ListOpenOrdersAsync(accountId, symbol, cancellationToken);
-        var balances = await _tradingApiService.ListBalancesAsync(accountId, null, cancellationToken);
+        var diagnosticSample = ShouldSampleAccountDiagnostic(ref _lastAccountDiagnosticAt);
+        if (diagnosticSample)
+        {
+            _logger.Info("AccountDiag", $"api snapshot begin tabId={TabId}, symbol={symbol}, sections={sections}, accountId={accountId}");
+        }
+
+        var totalStopwatch = Stopwatch.StartNew();
+        IReadOnlyList<ApiPositionDto> positions = [];
+        IReadOnlyList<ApiOpenOrderDto> orders = [];
+        IReadOnlyList<ApiBalanceDto> balances = [];
+        long positionsElapsedMs = 0;
+        long ordersElapsedMs = 0;
+        long balancesElapsedMs = 0;
+
+        if (sections.HasFlag(AccountSnapshotSections.Positions))
+        {
+            var stopwatch = Stopwatch.StartNew();
+            positions = await _tradingApiService.ListPositionsAsync(accountId, symbol, cancellationToken);
+            stopwatch.Stop();
+            positionsElapsedMs = stopwatch.ElapsedMilliseconds;
+        }
+
+        if (sections.HasFlag(AccountSnapshotSections.Orders))
+        {
+            var stopwatch = Stopwatch.StartNew();
+            orders = await _tradingApiService.ListOpenOrdersAsync(accountId, symbol, cancellationToken);
+            stopwatch.Stop();
+            ordersElapsedMs = stopwatch.ElapsedMilliseconds;
+        }
+
+        if (sections.HasFlag(AccountSnapshotSections.Balances))
+        {
+            var stopwatch = Stopwatch.StartNew();
+            balances = await _tradingApiService.ListBalancesAsync(accountId, null, cancellationToken);
+            stopwatch.Stop();
+            balancesElapsedMs = stopwatch.ElapsedMilliseconds;
+        }
+
+        totalStopwatch.Stop();
+        LogAccountDiagnosticIfNeeded(
+            "api snapshot end",
+            totalStopwatch.ElapsedMilliseconds,
+            diagnosticSample,
+            SlowAccountFetchMs,
+            ref _lastAccountDiagnosticAt,
+            $"tabId={TabId}, symbol={symbol}, sections={sections}, accountId={accountId}, positionsMs={positionsElapsedMs}, ordersMs={ordersElapsedMs}, balancesMs={balancesElapsedMs}, positions={positions.Count}, orders={orders.Count}, balances={balances.Count}");
 
         return new VenueAccountSnapshot(
             DateTimeOffset.UtcNow,
@@ -1728,14 +2402,16 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
                 x.MarkPrice,
                 x.UnrealizedPnlPct,
                 x.UnrealizedPnlUsd,
-                x.RealizedPnlUsd)).ToList(),
+                x.RealizedPnlUsd,
+                MarginModeText.ParseOrDefault(x.MarginMode, MarginMode.Unknown))).ToList(),
             orders.Select(x => new VenueOpenOrder(
                 x.Symbol,
                 x.NotionalUsd,
                 x.Leverage,
                 x.LimitPrice,
                 x.Status,
-                x.OrderId)).ToList(),
+                x.OrderId,
+                MarginModeText.ParseOrDefault(x.MarginMode, MarginMode.Unknown))).ToList(),
             balances.Select(x => new VenueBalance(
                 x.Asset,
                 x.Quantity,
@@ -1801,6 +2477,7 @@ public sealed class PositionPanelRow : ViewModelBase
 {
     private string _contractAmount = string.Empty;
     private string _leverage = string.Empty;
+    private string _marginMode = "-";
     private decimal _entryPrice;
     private decimal _markPrice;
     private decimal _unrealizedPnlPct;
@@ -1826,6 +2503,12 @@ public sealed class PositionPanelRow : ViewModelBase
     {
         get => _leverage;
         private set => SetProperty(ref _leverage, value);
+    }
+
+    public string MarginMode
+    {
+        get => _marginMode;
+        private set => SetProperty(ref _marginMode, value);
     }
 
     public decimal EntryPrice
@@ -1909,6 +2592,7 @@ public sealed class PositionPanelRow : ViewModelBase
     public void ApplyState(
         string contractAmount,
         string leverage,
+        string marginMode,
         decimal entryPrice,
         decimal markPrice,
         decimal unrealizedPnlPct,
@@ -1917,6 +2601,7 @@ public sealed class PositionPanelRow : ViewModelBase
     {
         ContractAmount = contractAmount;
         Leverage = leverage;
+        MarginMode = marginMode;
         EntryPrice = entryPrice;
         MarkPrice = markPrice;
         UnrealizedPnlPct = unrealizedPnlPct;
@@ -1929,6 +2614,7 @@ public sealed record PendingOrderPanelRow(
     string Symbol,
     string ContractAmount,
     string Leverage,
+    string MarginMode,
     string LimitPrice,
     string Status,
     string? VenueOrderId,
@@ -1982,7 +2668,8 @@ internal sealed record PositionState(
     decimal MarkPrice,
     decimal UnrealizedPnlUsd,
     decimal RealizedPnlUsd,
-    decimal Quantity);
+    decimal Quantity,
+    MarginMode MarginMode = MarginMode.Unknown);
 
 internal sealed record PendingOrderState(
     string LocalId,
@@ -1991,7 +2678,8 @@ internal sealed record PendingOrderState(
     decimal Leverage,
     decimal? LimitPrice,
     string Status,
-    string? VenueOrderId)
+    string? VenueOrderId,
+    MarginMode MarginMode = MarginMode.Unknown)
 {
     public DateTimeOffset CreatedAt { get; } = DateTimeOffset.UtcNow;
 }

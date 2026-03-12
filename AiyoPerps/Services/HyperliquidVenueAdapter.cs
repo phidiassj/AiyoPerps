@@ -6,6 +6,7 @@ using Nethereum.Util;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -29,7 +30,15 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
     private readonly HttpClient _httpClient = new();
     private readonly Channel<MarketEvent> _channel = Channel.CreateUnbounded<MarketEvent>();
     private readonly SemaphoreSlim _metaGate = new(1, 1);
+    private readonly SemaphoreSlim _allMidsCacheGate = new(1, 1);
+    private readonly SemaphoreSlim _balancesCacheGate = new(1, 1);
     private readonly Sha3Keccack _keccak = Sha3Keccack.Current;
+    private DateTimeOffset _lastAccountDiagnosticAt;
+    private static readonly TimeSpan AccountDiagnosticSampleInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan AccountMidsCacheTtl = TimeSpan.FromMilliseconds(1500);
+    private static readonly TimeSpan AccountBalancesCacheTtl = TimeSpan.FromSeconds(3);
+    private const long SlowAccountFetchMs = 250;
+    private const long SlowAccountSectionMs = 200;
 
     private ClientWebSocket? _ws;
     private CancellationTokenSource? _wsCts;
@@ -37,6 +46,11 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
     private string _coin = "BTC";
     private Dictionary<string, int>? _assetByCoin;
     private Dictionary<string, int>? _sizeDecimalsByCoin;
+    private IReadOnlyDictionary<string, decimal> _allMidsCache = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+    private DateTimeOffset _allMidsCacheAt = DateTimeOffset.MinValue;
+    private IReadOnlyList<VenueBalance> _balancesCache = [];
+    private string? _balancesCacheInfoAddress;
+    private DateTimeOffset _balancesCacheAt = DateTimeOffset.MinValue;
 
     public HyperliquidVenueAdapter(string environment, AccountCredentials credentials, AppLogger logger)
     {
@@ -116,7 +130,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         _wsCts = null;
     }
 
-    public async Task<(bool IsSuccess, string Message)> ConfigureLeverageAsync(string symbol, decimal leverage, CancellationToken cancellationToken = default)
+    public async Task<(bool IsSuccess, string Message)> ConfigureLeverageAsync(string symbol, decimal leverage, MarginMode marginMode, CancellationToken cancellationToken = default)
     {
         if (!_credentials.HasWalletCredentials)
         {
@@ -134,7 +148,12 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
             var coin = NormalizeCoin(symbol);
             var asset = await ResolveAssetIndexAsync(coin, cancellationToken);
             var leverageInt = Math.Max(1, (int)Math.Round(leverage, MidpointRounding.AwayFromZero));
-            var isCross = await ResolveMarginModeAsync(coin, cancellationToken);
+            var isCross = marginMode switch
+            {
+                MarginMode.Cross => true,
+                MarginMode.Isolated => false,
+                _ => await ResolveMarginModeAsync(coin, cancellationToken)
+            };
             var action = new
             {
                 type = "updateLeverage",
@@ -161,7 +180,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                 Content = new StringContent(reqBody, Encoding.UTF8, "application/json")
             };
 
-            _logger.Info("Hyperliquid", $"ConfigureLeverage submit coin={coin}, asset={asset}, leverage={leverageInt}, rawLeverage={leverage}, isCross={isCross}");
+            _logger.Info("Hyperliquid", $"ConfigureLeverage submit coin={coin}, asset={asset}, leverage={leverageInt}, rawLeverage={leverage}, requestedMarginMode={marginMode.ToApiValue()}, isCross={isCross}");
             using var resp = await _httpClient.SendAsync(req, cancellationToken);
             var body = await resp.Content.ReadAsStringAsync(cancellationToken);
             if (!resp.IsSuccessStatusCode)
@@ -481,7 +500,12 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         return finalList;
     }
 
-    public async Task<VenueAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken = default)
+    public Task<VenueAccountSnapshot> GetAccountSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        return GetAccountSnapshotAsync(AccountSnapshotSections.All, cancellationToken);
+    }
+
+    public async Task<VenueAccountSnapshot> GetAccountSnapshotAsync(AccountSnapshotSections sections, CancellationToken cancellationToken = default)
     {
         var infoAddress = ResolveInfoAddress();
         var usingFallback = string.IsNullOrWhiteSpace(_credentials.AccountAddress) && !string.IsNullOrWhiteSpace(_credentials.WalletAddress);
@@ -496,49 +520,76 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
             _logger.Warn("Hyperliquid", $"GetAccountSnapshot using wallet fallback for info address={MaskAddress(infoAddress)}. Configure account public address for accurate balances.");
         }
 
-        IReadOnlyDictionary<string, decimal> mids;
-        try
+        var diagnosticSample = ShouldSampleAccountDiagnostic();
+        if (diagnosticSample)
         {
-            mids = await FetchAllMidsAsync(cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.Error("Hyperliquid", "GetAccountSnapshot failed to fetch mids", ex);
-            mids = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            _logger.Info(
+                "AccountDiag",
+                $"provider snapshot begin provider={nameof(HyperliquidVenueAdapter)}, venue={VenueId}, sections={sections}, info={MaskAddress(infoAddress)}, usingFallback={usingFallback}");
         }
 
-        IReadOnlyList<VenuePosition> positions;
-        try
+        var totalStopwatch = Stopwatch.StartNew();
+        long midsElapsedMs = 0;
+        long positionsElapsedMs = 0;
+        long ordersElapsedMs = 0;
+        long balancesElapsedMs = 0;
+        var midsCacheHit = false;
+        var balancesCacheHit = false;
+        IReadOnlyDictionary<string, decimal> mids = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        var needsMids = sections.HasFlag(AccountSnapshotSections.Positions) || sections.HasFlag(AccountSnapshotSections.Balances);
+        Task<(IReadOnlyDictionary<string, decimal> Mids, long ElapsedMs, bool CacheHit)>? midsTask = needsMids
+            ? TryFetchAllMidsMeasuredAsync(cancellationToken)
+            : null;
+        Task<(IReadOnlyList<VenueOpenOrder> Orders, long ElapsedMs)>? ordersTask = sections.HasFlag(AccountSnapshotSections.Orders)
+            ? TryFetchOpenOrdersMeasuredAsync(infoAddress, cancellationToken)
+            : null;
+
+        if (midsTask is not null)
         {
-            positions = await FetchPositionsAsync(infoAddress, mids, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.Error("Hyperliquid", "GetAccountSnapshot failed to fetch positions", ex);
-            positions = [];
+            var midsResult = await midsTask;
+            mids = midsResult.Mids;
+            midsElapsedMs = midsResult.ElapsedMs;
+            midsCacheHit = midsResult.CacheHit;
         }
 
-        IReadOnlyList<VenueOpenOrder> openOrders;
-        try
+        Task<(IReadOnlyList<VenuePosition> Positions, long ElapsedMs)>? positionsTask = sections.HasFlag(AccountSnapshotSections.Positions)
+            ? TryFetchPositionsMeasuredAsync(infoAddress, mids, cancellationToken)
+            : null;
+        Task<(IReadOnlyList<VenueBalance> Balances, long ElapsedMs, bool CacheHit)>? balancesTask = sections.HasFlag(AccountSnapshotSections.Balances)
+            ? TryFetchBalancesMeasuredAsync(infoAddress, mids, cancellationToken)
+            : null;
+
+        IReadOnlyList<VenueOpenOrder> openOrders = [];
+        if (ordersTask is not null)
         {
-            openOrders = await FetchOpenOrdersAsync(infoAddress, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.Error("Hyperliquid", "GetAccountSnapshot failed to fetch open orders", ex);
-            openOrders = [];
+            var ordersResult = await ordersTask;
+            openOrders = ordersResult.Orders;
+            ordersElapsedMs = ordersResult.ElapsedMs;
         }
 
-        IReadOnlyList<VenueBalance> balances;
-        try
+        IReadOnlyList<VenuePosition> positions = [];
+        if (positionsTask is not null)
         {
-            balances = await FetchBalancesAsync(infoAddress, mids, cancellationToken);
+            var positionsResult = await positionsTask;
+            positions = positionsResult.Positions;
+            positionsElapsedMs = positionsResult.ElapsedMs;
         }
-        catch (Exception ex)
+
+        IReadOnlyList<VenueBalance> balances = [];
+        if (balancesTask is not null)
         {
-            _logger.Error("Hyperliquid", "GetAccountSnapshot failed to fetch balances", ex);
-            balances = [];
+            var balancesResult = await balancesTask;
+            balances = balancesResult.Balances;
+            balancesElapsedMs = balancesResult.ElapsedMs;
+            balancesCacheHit = balancesResult.CacheHit;
         }
+
+        totalStopwatch.Stop();
+        LogAccountDiagnosticIfNeeded(
+            "provider snapshot end",
+            totalStopwatch.ElapsedMilliseconds,
+            diagnosticSample,
+            $"provider={nameof(HyperliquidVenueAdapter)}, venue={VenueId}, sections={sections}, info={MaskAddress(infoAddress)}, usingFallback={usingFallback}, midsMs={midsElapsedMs}, midsCacheHit={midsCacheHit}, positionsMs={positionsElapsedMs}, ordersMs={ordersElapsedMs}, balancesMs={balancesElapsedMs}, balancesCacheHit={balancesCacheHit}, mids={mids.Count}, positions={positions.Count}, orders={openOrders.Count}, balances={balances.Count}");
 
         _logger.Info("Hyperliquid", $"GetAccountSnapshot ok info={MaskAddress(infoAddress)}, positions={positions.Count}, orders={openOrders.Count}, balances={balances.Count}");
         return new VenueAccountSnapshot(DateTimeOffset.UtcNow, positions, openOrders, balances);
@@ -549,8 +600,207 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         return _channel.Reader.ReadAllAsync(cancellationToken);
     }
 
+    private bool ShouldSampleAccountDiagnostic()
+    {
+        if (!_logger.IsDevelopment)
+        {
+            return false;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastAccountDiagnosticAt < AccountDiagnosticSampleInterval)
+        {
+            return false;
+        }
+
+        _lastAccountDiagnosticAt = now;
+        return true;
+    }
+
+    private void LogAccountDiagnosticIfNeeded(string phase, long elapsedMs, bool sampled, string details)
+    {
+        if (!_logger.IsDevelopment)
+        {
+            return;
+        }
+
+        if (!sampled && elapsedMs < SlowAccountFetchMs)
+        {
+            return;
+        }
+
+        if (!sampled)
+        {
+            _lastAccountDiagnosticAt = DateTimeOffset.UtcNow;
+        }
+
+        _logger.Info("AccountDiag", $"{phase} elapsedMs={elapsedMs}, {details}");
+    }
+
+    private void LogAccountSectionDiagnosticIfNeeded(string phase, long elapsedMs, string details)
+    {
+        if (!_logger.IsDevelopment || elapsedMs < SlowAccountSectionMs)
+        {
+            return;
+        }
+
+        _logger.Info("AccountDiag", $"{phase} elapsedMs={elapsedMs}, {details}");
+    }
+
+    private async Task<(IReadOnlyDictionary<string, decimal> Mids, long ElapsedMs, bool CacheHit)> TryFetchAllMidsMeasuredAsync(CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var result = await GetAllMidsCachedAsync(cancellationToken);
+            stopwatch.Stop();
+            return (result.Mids, stopwatch.ElapsedMilliseconds, result.CacheHit);
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            _logger.Error("Hyperliquid", "GetAccountSnapshot failed to fetch mids", ex);
+            return (new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase), stopwatch.ElapsedMilliseconds, false);
+        }
+    }
+
+    private async Task<(IReadOnlyList<VenuePosition> Positions, long ElapsedMs)> TryFetchPositionsMeasuredAsync(
+        string infoAddress,
+        IReadOnlyDictionary<string, decimal> mids,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var positions = await FetchPositionsAsync(infoAddress, mids, cancellationToken);
+            stopwatch.Stop();
+            return (positions, stopwatch.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            _logger.Error("Hyperliquid", "GetAccountSnapshot failed to fetch positions", ex);
+            return ([], stopwatch.ElapsedMilliseconds);
+        }
+    }
+
+    private async Task<(IReadOnlyList<VenueOpenOrder> Orders, long ElapsedMs)> TryFetchOpenOrdersMeasuredAsync(
+        string infoAddress,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var orders = await FetchOpenOrdersAsync(infoAddress, cancellationToken);
+            stopwatch.Stop();
+            return (orders, stopwatch.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            _logger.Error("Hyperliquid", "GetAccountSnapshot failed to fetch open orders", ex);
+            return ([], stopwatch.ElapsedMilliseconds);
+        }
+    }
+
+    private async Task<(IReadOnlyList<VenueBalance> Balances, long ElapsedMs, bool CacheHit)> TryFetchBalancesMeasuredAsync(
+        string infoAddress,
+        IReadOnlyDictionary<string, decimal> mids,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var result = await GetBalancesCachedAsync(infoAddress, mids, cancellationToken);
+            stopwatch.Stop();
+            return (result.Balances, stopwatch.ElapsedMilliseconds, result.CacheHit);
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            _logger.Error("Hyperliquid", "GetAccountSnapshot failed to fetch balances", ex);
+            return ([], stopwatch.ElapsedMilliseconds, false);
+        }
+    }
+
+    private async Task<(IReadOnlyList<VenueBalance> Balances, bool CacheHit)> GetBalancesCachedAsync(
+        string infoAddress,
+        IReadOnlyDictionary<string, decimal> mids,
+        CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (_balancesCache.Count > 0 &&
+            string.Equals(_balancesCacheInfoAddress, infoAddress, StringComparison.OrdinalIgnoreCase) &&
+            now - _balancesCacheAt <= AccountBalancesCacheTtl)
+        {
+            return (_balancesCache, true);
+        }
+
+        await _balancesCacheGate.WaitAsync(cancellationToken);
+        try
+        {
+            now = DateTimeOffset.UtcNow;
+            if (_balancesCache.Count > 0 &&
+                string.Equals(_balancesCacheInfoAddress, infoAddress, StringComparison.OrdinalIgnoreCase) &&
+                now - _balancesCacheAt <= AccountBalancesCacheTtl)
+            {
+                return (_balancesCache, true);
+            }
+
+            var balances = await FetchBalancesAsync(infoAddress, mids, cancellationToken);
+            _balancesCache = balances;
+            _balancesCacheInfoAddress = infoAddress;
+            _balancesCacheAt = DateTimeOffset.UtcNow;
+            return (_balancesCache, false);
+        }
+        finally
+        {
+            _balancesCacheGate.Release();
+        }
+    }
+
+    private async Task<(IReadOnlyDictionary<string, decimal> Mids, bool CacheHit)> GetAllMidsCachedAsync(CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (_allMidsCache.Count > 0 && now - _allMidsCacheAt <= AccountMidsCacheTtl)
+        {
+            return (_allMidsCache, true);
+        }
+
+        await _allMidsCacheGate.WaitAsync(cancellationToken);
+        try
+        {
+            now = DateTimeOffset.UtcNow;
+            if (_allMidsCache.Count > 0 && now - _allMidsCacheAt <= AccountMidsCacheTtl)
+            {
+                return (_allMidsCache, true);
+            }
+
+            var mids = await FetchAllMidsAsync(cancellationToken);
+            _allMidsCache = mids;
+            _allMidsCacheAt = DateTimeOffset.UtcNow;
+            return (_allMidsCache, false);
+        }
+        catch
+        {
+            if (_allMidsCache.Count > 0)
+            {
+                _logger.Warn("Hyperliquid", "GetAllMidsCachedAsync falling back to stale mids cache");
+                return (_allMidsCache, true);
+            }
+
+            throw;
+        }
+        finally
+        {
+            _allMidsCacheGate.Release();
+        }
+    }
+
     private async Task<IReadOnlyList<VenuePosition>> FetchPositionsAsync(string infoAddress, IReadOnlyDictionary<string, decimal> mids, CancellationToken cancellationToken)
     {
+        var totalStopwatch = Stopwatch.StartNew();
+        var httpStopwatch = Stopwatch.StartNew();
         var payload = JsonSerializer.Serialize(new { type = "clearinghouseState", user = infoAddress });
         using var req = new HttpRequestMessage(HttpMethod.Post, _restBase + "/info")
         {
@@ -559,11 +809,13 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
 
         using var resp = await _httpClient.SendAsync(req, cancellationToken);
         var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+        httpStopwatch.Stop();
         if (!resp.IsSuccessStatusCode)
         {
             throw new InvalidOperationException($"clearinghouseState failed {(int)resp.StatusCode}: {Trim(body)}");
         }
 
+        var parseStopwatch = Stopwatch.StartNew();
         using var doc = JsonDocument.Parse(body);
         if (!doc.RootElement.TryGetProperty("assetPositions", out var positionsElement) ||
             positionsElement.ValueKind != JsonValueKind.Array)
@@ -676,7 +928,8 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                     markPx,
                     unrealizedPct,
                     unrealizedPnlUsd,
-                    realizedPnlUsd));
+                    realizedPnlUsd,
+                    ParseMarginModeFromLeverageObject(p)));
                 parsedRows++;
             }
             catch (Exception ex)
@@ -691,12 +944,20 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
             }
         }
 
+        parseStopwatch.Stop();
+        totalStopwatch.Stop();
+        LogAccountSectionDiagnosticIfNeeded(
+            "positions detail",
+            totalStopwatch.ElapsedMilliseconds,
+            $"provider={nameof(HyperliquidVenueAdapter)}, info={MaskAddress(infoAddress)}, httpMs={httpStopwatch.ElapsedMilliseconds}, parseMs={parseStopwatch.ElapsedMilliseconds}, rows={totalRows}, parsed={parsedRows}, skippedNoSymbol={skippedNoSymbol}, skippedZeroQty={skippedZeroQty}, skippedMalformed={skippedMalformed}");
         _logger.Info("Hyperliquid", $"FetchPositions done rows={totalRows}, parsed={parsedRows}, skippedNoSymbol={skippedNoSymbol}, skippedZeroQty={skippedZeroQty}, skippedMalformed={skippedMalformed}, firstRow={firstRaw}, firstMalformed={firstMalformed}");
         return result;
     }
 
     private async Task<IReadOnlyList<VenueOpenOrder>> FetchOpenOrdersAsync(string infoAddress, CancellationToken cancellationToken)
     {
+        var totalStopwatch = Stopwatch.StartNew();
+        var httpStopwatch = Stopwatch.StartNew();
         var payload = JsonSerializer.Serialize(new { type = "openOrders", user = infoAddress });
         using var req = new HttpRequestMessage(HttpMethod.Post, _restBase + "/info")
         {
@@ -705,12 +966,14 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
 
         using var resp = await _httpClient.SendAsync(req, cancellationToken);
         var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+        httpStopwatch.Stop();
         if (!resp.IsSuccessStatusCode)
         {
             _logger.Warn("Hyperliquid", $"openOrders failed status={(int)resp.StatusCode}");
             return [];
         }
 
+        var parseStopwatch = Stopwatch.StartNew();
         using var doc = JsonDocument.Parse(body);
         if (doc.RootElement.ValueKind != JsonValueKind.Array)
         {
@@ -718,8 +981,10 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         }
 
         var result = new List<VenueOpenOrder>();
+        var totalRows = 0;
         foreach (var item in doc.RootElement.EnumerateArray())
         {
+            totalRows++;
             var coin = ReadString(item, "coin");
             if (string.IsNullOrWhiteSpace(coin))
             {
@@ -772,6 +1037,12 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                 orderId));
         }
 
+        parseStopwatch.Stop();
+        totalStopwatch.Stop();
+        LogAccountSectionDiagnosticIfNeeded(
+            "orders detail",
+            totalStopwatch.ElapsedMilliseconds,
+            $"provider={nameof(HyperliquidVenueAdapter)}, info={MaskAddress(infoAddress)}, httpMs={httpStopwatch.ElapsedMilliseconds}, parseMs={parseStopwatch.ElapsedMilliseconds}, rows={totalRows}, parsed={result.Count}");
         return result;
     }
 
@@ -1190,6 +1461,8 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         _logger.Info("Hyperliquid", "DisposeAsync called");
         await DisconnectMarketDataAsync(CancellationToken.None);
         _httpClient.Dispose();
+        _balancesCacheGate.Dispose();
+        _allMidsCacheGate.Dispose();
         _metaGate.Dispose();
     }
 
@@ -1327,6 +1600,18 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         }
 
         return true;
+    }
+
+    private static MarginMode ParseMarginModeFromLeverageObject(JsonElement position)
+    {
+        if (!position.TryGetProperty("leverage", out var leverageElement) ||
+            leverageElement.ValueKind != JsonValueKind.Object)
+        {
+            return MarginMode.Unknown;
+        }
+
+        var leverageType = ReadFirstString(leverageElement, "type", "mode");
+        return MarginModeText.ParseOrDefault(leverageType, MarginMode.Unknown);
     }
 
     private void ParseMessage(string json)

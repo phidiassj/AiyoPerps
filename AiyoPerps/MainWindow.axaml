@@ -131,6 +131,7 @@
                                  FontFamily="Consolas"
                                  FontSize="18"
                                  Foreground="#74D0C9"
+                                 TextTrimming="CharacterEllipsis"
                                  VerticalAlignment="Center" />
                     </StackPanel>
                     <Grid Grid.Row="1">
@@ -298,6 +299,19 @@
                             </StackPanel>
                             <TextBlock Text="{Binding L[OrderPanel_Leverage]}" Classes="label" />
                             <TextBox Watermark="{Binding L[OrderPanel_Leverage_Example]}" Text="{Binding OrderLeverage}" />
+                            <TextBlock Text="{Binding L[OrderPanel_MarginMode]}" Classes="label" />
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                              <RadioButton Content="Cross"
+                                           GroupName="MarginModeGroup"
+                                           IsChecked="{Binding IsCrossMarginModeSelected}" />
+                              <RadioButton Content="Isolated"
+                                           GroupName="MarginModeGroup"
+                                           IsChecked="{Binding IsIsolatedMarginModeSelected}"
+                                           IsEnabled="{Binding CanUseIsolatedMarginMode}" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding MarginModeSupportText}"
+                                       Classes="label"
+                                       TextWrapping="Wrap" />
                             <TextBlock Text="{Binding L[OrderPanel_Amount]}" Classes="label" />
                             <Grid ColumnDefinitions="*,100" ColumnSpacing="8">
                               <TextBox Grid.Column="0" Watermark="{Binding L[OrderPanel_Amount_Example]}" Text="{Binding OrderQuantity}" />
@@ -341,6 +355,10 @@
                                         <TextBlock Grid.Column="1" Text="{Binding Leverage}" HorizontalAlignment="Left" />
                                       </Grid>
                                       <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                        <TextBlock Grid.Column="0" Text="{Binding DataContext.L[OrderPanel_MarginMode], RelativeSource={RelativeSource AncestorType=TabControl}}" Classes="label" />
+                                        <TextBlock Grid.Column="1" Text="{Binding MarginMode}" HorizontalAlignment="Left" />
+                                      </Grid>
+                                      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                                         <TextBlock Grid.Column="0" Text="{Binding DataContext.L[Position_EntryPrice], RelativeSource={RelativeSource AncestorType=TabControl}}" Classes="label" />
                                         <TextBlock Grid.Column="1" Text="{Binding EntryPriceText}" FontFamily="Consolas" HorizontalAlignment="Left" />
                                       </Grid>
@@ -367,6 +385,7 @@
                                                  Watermark="{Binding DataContext.L[Position_Close_Price_Watermark], RelativeSource={RelativeSource AncestorType=TabControl}}" />
                                         <Button Grid.Column="2"
                                                 Content="{Binding DataContext.L[Position_Close_Limit], RelativeSource={RelativeSource AncestorType=TabControl}}"
+                                                IsEnabled="{Binding DataContext.CanUseRestingLimitClose, RelativeSource={RelativeSource AncestorType=TabControl}}"
                                                 Command="{Binding DataContext.ClosePositionLimitCommand, RelativeSource={RelativeSource AncestorType=TabControl}}"
                                                 CommandParameter="{Binding}" />
                                         <Button Grid.Column="3"
@@ -375,6 +394,12 @@
                                                 CommandParameter="{Binding}"
                                                 Classes="cta" />
                                       </Grid>
+                                      <TextBlock Text="{Binding DataContext.CloseLimitSupportText, RelativeSource={RelativeSource AncestorType=TabControl}}"
+                                                 Classes="label"
+                                                 Margin="0,4,0,0"
+                                                 Foreground="#E5B971"
+                                                 TextWrapping="Wrap"
+                                                 IsVisible="{Binding DataContext.IsRestingLimitCloseUnavailable, RelativeSource={RelativeSource AncestorType=TabControl}}" />
                                     </StackPanel>
                                   </Border>
                                 </DataTemplate>
@@ -410,6 +435,10 @@
                                       <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                                         <TextBlock Grid.Column="0" Text="{Binding DataContext.L[OrderPanel_Leverage], RelativeSource={RelativeSource AncestorType=TabControl}}" Classes="label" />
                                         <TextBlock Grid.Column="1" Text="{Binding Leverage}" HorizontalAlignment="Left" />
+                                      </Grid>
+                                      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                        <TextBlock Grid.Column="0" Text="{Binding DataContext.L[OrderPanel_MarginMode], RelativeSource={RelativeSource AncestorType=TabControl}}" Classes="label" />
+                                        <TextBlock Grid.Column="1" Text="{Binding MarginMode}" HorizontalAlignment="Left" />
                                       </Grid>
                                       <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                                         <TextBlock Grid.Column="0" Text="{Binding DataContext.L[OrderPanel_LimitPrice], RelativeSource={RelativeSource AncestorType=TabControl}}" Classes="label" />

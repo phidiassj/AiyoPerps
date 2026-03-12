@@ -1,4 +1,5 @@
 using AiyoPerps.Models;
+using AiyoPerps.Services;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
@@ -8,7 +9,7 @@ using Avalonia.Media;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
+using System.Diagnostics;
 
 namespace AiyoPerps.Controls;
 
@@ -22,9 +23,32 @@ public sealed class CandleChartControl : Control
     private const int MinVisibleCandles = 20;
     private const int MaxVisibleCandles = 400;
 
+    private static readonly Typeface AxisTypeface = new("Segoe UI");
+    private static readonly IBrush AxisTextBrush = new SolidColorBrush(Color.Parse("#84AFC0"));
+    private static readonly IBrush HoverLabelTextBrush = new SolidColorBrush(Color.Parse("#CDEBF6"));
+    private static readonly IBrush CurrentPriceLabelTextBrush = new SolidColorBrush(Color.Parse("#D9F0F5"));
+    private static readonly IBrush HoverLabelBackgroundBrush = new SolidColorBrush(Color.Parse("#11303E"));
+    private static readonly Pen GridPen = new(new SolidColorBrush(Color.Parse("#1E4B5C")), 1);
+    private static readonly Pen AxisLinePen = new(new SolidColorBrush(Color.Parse("#2A5D73")), 1);
+    private static readonly Pen UpPen = new(new SolidColorBrush(Color.Parse("#39C7A5")), 1);
+    private static readonly Pen DownPen = new(new SolidColorBrush(Color.Parse("#E05A73")), 1);
+    private static readonly IBrush UpBrush = new SolidColorBrush(Color.Parse("#39C7A5"));
+    private static readonly IBrush DownBrush = new SolidColorBrush(Color.Parse("#E05A73"));
+    private static readonly Pen CrosshairPen = new(new SolidColorBrush(Color.Parse("#5EAAC7")), 1, dashStyle: new DashStyle([4, 4], 0));
+    private static readonly Pen HoverLabelBorderPen = new(new SolidColorBrush(Color.Parse("#5EAAC7")), 1);
+    private static DateTimeOffset _lastRenderDiagnosticAt;
+    private static readonly TimeSpan RenderDiagnosticSampleInterval = TimeSpan.FromSeconds(2);
+    private const long SlowRenderThresholdMs = 10;
+
     private int _visibleCandles = 120;
     private int _hoverVisibleIndex = -1;
     private Point? _hoverPoint;
+    private bool _renderStateDirty = true;
+    private bool _hasRenderState;
+    private IReadOnlyList<CandleViewPoint>? _renderStateCandles;
+    private Rect _renderStateBounds;
+    private int _renderStateVisibleCandles;
+    private RenderState _renderState;
 
     public static readonly StyledProperty<IReadOnlyList<CandleViewPoint>?> CandlesProperty =
         AvaloniaProperty.Register<CandleChartControl, IReadOnlyList<CandleViewPoint>?>(nameof(Candles));
@@ -36,7 +60,7 @@ public sealed class CandleChartControl : Control
 
     static CandleChartControl()
     {
-        AffectsRender<CandleChartControl>(CandlesProperty, HoverCandleStatusProperty);
+        AffectsRender<CandleChartControl>(CandlesProperty);
     }
 
     public IReadOnlyList<CandleViewPoint>? Candles
@@ -63,26 +87,31 @@ public sealed class CandleChartControl : Control
     {
         base.Render(context);
 
+        var diagnosticSample = ShouldSampleRenderDiagnostic();
+        if (diagnosticSample)
+        {
+            App.Logger.Info("KlineDiag", $"render begin bounds={Bounds.Width:0.##}x{Bounds.Height:0.##}, visibleCandles={_visibleCandles}, hasHover={_hoverPoint.HasValue}");
+        }
+
+        var stopwatch = Stopwatch.StartNew();
         context.DrawRectangle(Brushes.Transparent, null, Bounds);
 
-        if (!TryBuildRenderState(Candles, Bounds, out var state))
+        if (!TryGetRenderState(out var state))
         {
+            stopwatch.Stop();
+            LogRenderDiagnosticIfNeeded(
+                "render end",
+                stopwatch.ElapsedMilliseconds,
+                diagnosticSample,
+                "state=empty");
             return;
         }
 
-        var gridPen = new Pen(new SolidColorBrush(Color.Parse("#1E4B5C")), 1);
-        var upPen = new Pen(new SolidColorBrush(Color.Parse("#39C7A5")), 1);
-        var downPen = new Pen(new SolidColorBrush(Color.Parse("#E05A73")), 1);
-        var upBrush = new SolidColorBrush(Color.Parse("#39C7A5"));
-        var downBrush = new SolidColorBrush(Color.Parse("#E05A73"));
-        var axisTextBrush = new SolidColorBrush(Color.Parse("#84AFC0"));
-        var axisLinePen = new Pen(new SolidColorBrush(Color.Parse("#2A5D73")), 1);
+        DrawPriceGridAndAxis(context, state);
 
-        DrawPriceGridAndAxis(context, state.PlotArea, state.PriceAxisArea, state.MinPrice, state.MaxPrice, state.PriceTickStep, gridPen, axisLinePen, axisTextBrush);
-
-        for (var i = 0; i < state.Visible.Count; i++)
+        for (var i = 0; i < state.VisibleCount; i++)
         {
-            var candle = state.Visible[i];
+            var candle = state.GetVisibleCandle(i);
             var x = GetCandleCenterX(state.PlotArea, state.CandleStep, i);
 
             var yHigh = Map(candle.High, state.MinPrice, state.MaxPrice, state.PlotArea);
@@ -91,8 +120,8 @@ public sealed class CandleChartControl : Control
             var yClose = Map(candle.Close, state.MinPrice, state.MaxPrice, state.PlotArea);
 
             var isUp = candle.Close >= candle.Open;
-            var pen = isUp ? upPen : downPen;
-            var brush = isUp ? upBrush : downBrush;
+            var pen = isUp ? UpPen : DownPen;
+            var brush = isUp ? UpBrush : DownBrush;
 
             context.DrawLine(pen, new Point(x, yHigh), new Point(x, yLow));
 
@@ -102,9 +131,25 @@ public sealed class CandleChartControl : Control
             context.DrawRectangle(brush, null, body);
         }
 
-        DrawTimeAxis(context, state.Visible, state.PlotArea, state.TimeAxisArea, state.CandleStep, axisLinePen, axisTextBrush);
+        DrawTimeAxis(context, state);
         DrawCurrentPriceMarker(context, state);
         DrawCrosshair(context, state);
+        stopwatch.Stop();
+        LogRenderDiagnosticIfNeeded(
+            "render end",
+            stopwatch.ElapsedMilliseconds,
+            diagnosticSample,
+            $"state=ready, visibleCount={state.VisibleCount}, lastOpen={state.LastVisibleCandle.OpenTime:O}, candleStep={state.CandleStep:0.###}");
+    }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+
+        if (change.Property == CandlesProperty || change.Property == BoundsProperty)
+        {
+            InvalidateRenderState();
+        }
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
@@ -176,19 +221,24 @@ public sealed class CandleChartControl : Control
         if (nextVisible != currentVisible)
         {
             _visibleCandles = nextVisible;
+            InvalidateRenderState();
+
             if (_hoverPoint.HasValue)
             {
                 UpdateHoverState(_hoverPoint.Value);
             }
+            else
+            {
+                InvalidateVisual();
+            }
 
-            InvalidateVisual();
             e.Handled = true;
         }
     }
 
     private void UpdateHoverState(Point pointer)
     {
-        if (!TryBuildRenderState(Candles, Bounds, out var state))
+        if (!TryGetRenderState(out var state))
         {
             ClearHoverState();
             return;
@@ -203,14 +253,28 @@ public sealed class CandleChartControl : Control
         var x = Math.Clamp(pointer.X, state.PlotArea.Left, state.PlotArea.Right - state.RightGap);
         var y = Math.Clamp(pointer.Y, state.PlotArea.Top, state.PlotArea.Bottom);
         var index = (int)Math.Round((x - state.PlotArea.X - (state.CandleStep / 2.0)) / state.CandleStep);
-        index = Math.Clamp(index, 0, state.Visible.Count - 1);
+        index = Math.Clamp(index, 0, state.VisibleCount - 1);
 
-        _hoverPoint = new Point(x, y);
+        var nextPoint = new Point(x, y);
+        var hoverIndexChanged = index != _hoverVisibleIndex;
+        var hoverPointChanged = !_hoverPoint.HasValue || _hoverPoint.Value != nextPoint;
+
+        _hoverPoint = nextPoint;
         _hoverVisibleIndex = index;
 
-        var candle = state.Visible[index];
-        HoverCandleStatus = FormatHoverStatus(candle);
-        InvalidateVisual();
+        if (hoverIndexChanged)
+        {
+            var hoverStatus = FormatHoverStatus(state.GetVisibleCandle(index));
+            if (!string.Equals(HoverCandleStatus, hoverStatus, StringComparison.Ordinal))
+            {
+                HoverCandleStatus = hoverStatus;
+            }
+        }
+
+        if (hoverIndexChanged || hoverPointChanged)
+        {
+            InvalidateVisual();
+        }
     }
 
     private void ClearHoverState()
@@ -222,13 +286,57 @@ public sealed class CandleChartControl : Control
 
         _hoverVisibleIndex = -1;
         _hoverPoint = null;
-        HoverCandleStatus = null;
+
+        if (!string.IsNullOrWhiteSpace(HoverCandleStatus))
+        {
+            HoverCandleStatus = null;
+        }
+
         InvalidateVisual();
+    }
+
+    private bool TryGetRenderState(out RenderState state)
+    {
+        var candles = Candles;
+        var bounds = Bounds;
+        if (!_renderStateDirty &&
+            _hasRenderState &&
+            ReferenceEquals(_renderStateCandles, candles) &&
+            _renderStateBounds == bounds &&
+            _renderStateVisibleCandles == _visibleCandles)
+        {
+            state = _renderState;
+            return true;
+        }
+
+        if (!TryBuildRenderState(candles, bounds, out state))
+        {
+            _hasRenderState = false;
+            _renderState = default;
+            _renderStateCandles = candles;
+            _renderStateBounds = bounds;
+            _renderStateVisibleCandles = _visibleCandles;
+            _renderStateDirty = false;
+            return false;
+        }
+
+        _renderState = state;
+        _renderStateCandles = candles;
+        _renderStateBounds = bounds;
+        _renderStateVisibleCandles = _visibleCandles;
+        _renderStateDirty = false;
+        _hasRenderState = true;
+        return true;
+    }
+
+    private void InvalidateRenderState()
+    {
+        _renderStateDirty = true;
     }
 
     private static string FormatHoverStatus(CandleViewPoint candle)
     {
-        return $"{candle.OpenTime.ToLocalTime():MM-dd HH:mm}   O:{FormatNumber(candle.Open)}   H:{FormatNumber(candle.High)}   L:{FormatNumber(candle.Low)}   C:{FormatNumber(candle.Close)}";
+        return CandleStatusFormatter.FormatHover(candle);
     }
 
     private bool TryBuildRenderState(IReadOnlyList<CandleViewPoint>? candles, Rect bounds, out RenderState state)
@@ -241,7 +349,7 @@ public sealed class CandleChartControl : Control
 
         _visibleCandles = Math.Clamp(_visibleCandles, MinVisibleCandles, MaxVisibleCandles);
         var visibleCount = Math.Min(_visibleCandles, candles.Count);
-        var visible = candles.TakeLast(visibleCount).ToList();
+        var visibleStartIndex = candles.Count - visibleCount;
 
         var plotArea = new Rect(
             PlotPadding,
@@ -257,13 +365,15 @@ public sealed class CandleChartControl : Control
         var priceAxisArea = new Rect(plotArea.Right, plotArea.Y, PriceAxisWidth, plotArea.Height);
         var timeAxisArea = new Rect(plotArea.X, plotArea.Bottom, plotArea.Width, TimeAxisHeight);
         var drawableWidth = Math.Max(1, plotArea.Width - RightEdgeGap);
-        var candleStep = drawableWidth / visible.Count;
+        var candleStep = drawableWidth / visibleCount;
         var candleWidth = Math.Clamp(candleStep * 0.72, 2.0, 14.0);
 
-        var (minPrice, maxPrice, priceTickStep) = BuildPriceRange(visible);
+        var (minPrice, maxPrice, priceTickStep) = BuildPriceRange(candles, visibleStartIndex, visibleCount);
 
         state = new RenderState(
-            visible,
+            candles,
+            visibleStartIndex,
+            visibleCount,
             plotArea,
             priceAxisArea,
             timeAxisArea,
@@ -276,10 +386,26 @@ public sealed class CandleChartControl : Control
         return true;
     }
 
-    private static (decimal MinPrice, decimal MaxPrice, decimal PriceTickStep) BuildPriceRange(IReadOnlyList<CandleViewPoint> visible)
+    private static (decimal MinPrice, decimal MaxPrice, decimal PriceTickStep) BuildPriceRange(IReadOnlyList<CandleViewPoint> candles, int startIndex, int count)
     {
-        var rawMax = visible.Max(x => x.High);
-        var rawMin = visible.Min(x => x.Low);
+        var first = candles[startIndex];
+        var rawMax = first.High;
+        var rawMin = first.Low;
+
+        for (var i = 1; i < count; i++)
+        {
+            var candle = candles[startIndex + i];
+            if (candle.High > rawMax)
+            {
+                rawMax = candle.High;
+            }
+
+            if (candle.Low < rawMin)
+            {
+                rawMin = candle.Low;
+            }
+        }
+
         var range = Math.Max(1m, rawMax - rawMin);
         var pad = Math.Max(AxisSnapUnit, range * 0.05m);
 
@@ -306,121 +432,95 @@ public sealed class CandleChartControl : Control
         return (min, max, tickStep);
     }
 
-    private static void DrawPriceGridAndAxis(
-        DrawingContext context,
-        Rect plotArea,
-        Rect priceAxisArea,
-        decimal min,
-        decimal max,
-        decimal tickStep,
-        Pen gridPen,
-        Pen axisLinePen,
-        IBrush textBrush)
+    private static void DrawPriceGridAndAxis(DrawingContext context, RenderState state)
     {
-        context.DrawLine(axisLinePen, new Point(plotArea.Right, plotArea.Top), new Point(plotArea.Right, plotArea.Bottom));
+        context.DrawLine(AxisLinePen, new Point(state.PlotArea.Right, state.PlotArea.Top), new Point(state.PlotArea.Right, state.PlotArea.Bottom));
 
         var guard = 0;
-        for (var price = min; price <= max + (tickStep / 2m) && guard < 200; price += tickStep, guard++)
+        for (var price = state.MinPrice; price <= state.MaxPrice + (state.PriceTickStep / 2m) && guard < 200; price += state.PriceTickStep, guard++)
         {
-            var y = Map(price, min, max, plotArea);
-            context.DrawLine(gridPen, new Point(plotArea.Left, y), new Point(plotArea.Right, y));
+            var y = Map(price, state.MinPrice, state.MaxPrice, state.PlotArea);
+            context.DrawLine(GridPen, new Point(state.PlotArea.Left, y), new Point(state.PlotArea.Right, y));
 
             var text = new FormattedText(
                 FormatNumber(price),
                 CultureInfo.InvariantCulture,
                 FlowDirection.LeftToRight,
-                new Typeface("Segoe UI"),
+                AxisTypeface,
                 11,
-                textBrush);
+                AxisTextBrush);
 
-            context.DrawText(text, new Point(priceAxisArea.X + 4, y - (text.Height / 2)));
+            context.DrawText(text, new Point(state.PriceAxisArea.X + 4, y - (text.Height / 2)));
         }
     }
 
-    private static void DrawTimeAxis(
-        DrawingContext context,
-        IReadOnlyList<CandleViewPoint> visible,
-        Rect plotArea,
-        Rect timeAxisArea,
-        double candleStep,
-        Pen axisLinePen,
-        IBrush textBrush)
+    private static void DrawTimeAxis(DrawingContext context, RenderState state)
     {
-        context.DrawLine(axisLinePen, new Point(plotArea.Left, plotArea.Bottom), new Point(plotArea.Right, plotArea.Bottom));
+        context.DrawLine(AxisLinePen, new Point(state.PlotArea.Left, state.PlotArea.Bottom), new Point(state.PlotArea.Right, state.PlotArea.Bottom));
 
-        if (visible.Count == 0)
-        {
-            return;
-        }
-
-        var targetLabels = Math.Min(6, Math.Max(2, visible.Count / 20));
-        var stepIndex = Math.Max(1, visible.Count / targetLabels);
-        var span = visible[^1].OpenTime - visible[0].OpenTime;
+        var targetLabels = Math.Min(6, Math.Max(2, state.VisibleCount / 20));
+        var stepIndex = Math.Max(1, state.VisibleCount / targetLabels);
+        var span = state.LastVisibleCandle.OpenTime - state.FirstVisibleCandle.OpenTime;
         var fmt = span.TotalDays >= 1 ? "MM-dd HH:mm" : "HH:mm";
 
-        for (var i = 0; i < visible.Count; i += stepIndex)
+        for (var i = 0; i < state.VisibleCount; i += stepIndex)
         {
-            var x = GetCandleCenterX(plotArea, candleStep, i);
-            context.DrawLine(axisLinePen, new Point(x, plotArea.Bottom), new Point(x, plotArea.Bottom + 4));
+            var x = GetCandleCenterX(state.PlotArea, state.CandleStep, i);
+            context.DrawLine(AxisLinePen, new Point(x, state.PlotArea.Bottom), new Point(x, state.PlotArea.Bottom + 4));
 
-            var label = visible[i].OpenTime.ToLocalTime().ToString(fmt, CultureInfo.InvariantCulture);
+            var label = state.GetVisibleCandle(i).OpenTime.ToLocalTime().ToString(fmt, CultureInfo.InvariantCulture);
             var text = new FormattedText(
                 label,
                 CultureInfo.InvariantCulture,
                 FlowDirection.LeftToRight,
-                new Typeface("Segoe UI"),
+                AxisTypeface,
                 11,
-                textBrush);
+                AxisTextBrush);
 
-            context.DrawText(text, new Point(x - (text.Width / 2), timeAxisArea.Y + 4));
+            context.DrawText(text, new Point(x - (text.Width / 2), state.TimeAxisArea.Y + 4));
         }
     }
 
     private void DrawCrosshair(DrawingContext context, RenderState state)
     {
-        if (_hoverVisibleIndex < 0 || _hoverVisibleIndex >= state.Visible.Count || _hoverPoint is null)
+        if (_hoverVisibleIndex < 0 || _hoverVisibleIndex >= state.VisibleCount || _hoverPoint is null)
         {
             return;
         }
 
-        var candle = state.Visible[_hoverVisibleIndex];
+        var candle = state.GetVisibleCandle(_hoverVisibleIndex);
         var x = GetCandleCenterX(state.PlotArea, state.CandleStep, _hoverVisibleIndex);
         var y = Math.Clamp(_hoverPoint.Value.Y, state.PlotArea.Top, state.PlotArea.Bottom);
 
-        var crossPen = new Pen(new SolidColorBrush(Color.Parse("#5EAAC7")), 1, dashStyle: new DashStyle([4, 4], 0));
-        context.DrawLine(crossPen, new Point(x, state.PlotArea.Top), new Point(x, state.PlotArea.Bottom));
-        context.DrawLine(crossPen, new Point(state.PlotArea.Left, y), new Point(state.PlotArea.Right, y));
-
-        var labelBackground = new SolidColorBrush(Color.Parse("#11303E"));
-        var labelBorder = new Pen(new SolidColorBrush(Color.Parse("#5EAAC7")), 1);
-        var labelTextBrush = new SolidColorBrush(Color.Parse("#CDEBF6"));
+        context.DrawLine(CrosshairPen, new Point(x, state.PlotArea.Top), new Point(x, state.PlotArea.Bottom));
+        context.DrawLine(CrosshairPen, new Point(state.PlotArea.Left, y), new Point(state.PlotArea.Right, y));
 
         var priceValue = InverseMap(y, state.MinPrice, state.MaxPrice, state.PlotArea);
         var priceText = new FormattedText(
             FormatNumber(priceValue),
             CultureInfo.InvariantCulture,
             FlowDirection.LeftToRight,
-            new Typeface("Segoe UI"),
+            AxisTypeface,
             11,
-            labelTextBrush);
+            HoverLabelTextBrush);
 
         var priceRect = new Rect(
             state.PriceAxisArea.X + 2,
             y - (priceText.Height / 2) - 2,
             priceText.Width + 8,
             priceText.Height + 4);
-        context.DrawRectangle(labelBackground, labelBorder, priceRect, 3);
+        context.DrawRectangle(HoverLabelBackgroundBrush, HoverLabelBorderPen, priceRect, 3);
         context.DrawText(priceText, new Point(priceRect.X + 4, priceRect.Y + 2));
 
-        var span = state.Visible[^1].OpenTime - state.Visible[0].OpenTime;
+        var span = state.LastVisibleCandle.OpenTime - state.FirstVisibleCandle.OpenTime;
         var timeFmt = span.TotalDays >= 1 ? "MM-dd HH:mm" : "HH:mm";
         var timeText = new FormattedText(
             candle.OpenTime.ToLocalTime().ToString(timeFmt, CultureInfo.InvariantCulture),
             CultureInfo.InvariantCulture,
             FlowDirection.LeftToRight,
-            new Typeface("Segoe UI"),
+            AxisTypeface,
             11,
-            labelTextBrush);
+            HoverLabelTextBrush);
 
         var timeX = Math.Clamp(
             x - (timeText.Width / 2) - 4,
@@ -432,18 +532,13 @@ public sealed class CandleChartControl : Control
             state.TimeAxisArea.Y + 3,
             timeText.Width + 8,
             timeText.Height + 4);
-        context.DrawRectangle(labelBackground, labelBorder, timeRect, 3);
+        context.DrawRectangle(HoverLabelBackgroundBrush, HoverLabelBorderPen, timeRect, 3);
         context.DrawText(timeText, new Point(timeRect.X + 4, timeRect.Y + 2));
     }
 
     private static void DrawCurrentPriceMarker(DrawingContext context, RenderState state)
     {
-        if (state.Visible.Count == 0)
-        {
-            return;
-        }
-
-        var lastCandle = state.Visible[^1];
+        var lastCandle = state.LastVisibleCandle;
         var price = lastCandle.Close;
         var y = Map(price, state.MinPrice, state.MaxPrice, state.PlotArea);
         var markerColor = lastCandle.Close >= lastCandle.Open
@@ -451,7 +546,6 @@ public sealed class CandleChartControl : Control
             : Color.Parse("#E05A73");
         var markerBrush = new SolidColorBrush(markerColor);
         var markerPen = new Pen(markerBrush, 1, dashStyle: new DashStyle([5, 4], 0));
-        var labelTextBrush = new SolidColorBrush(Color.Parse("#D9F0F5"));
         var labelBorder = new Pen(markerBrush, 1);
 
         context.DrawLine(
@@ -463,9 +557,9 @@ public sealed class CandleChartControl : Control
             FormatNumber(price),
             CultureInfo.InvariantCulture,
             FlowDirection.LeftToRight,
-            new Typeface("Segoe UI"),
+            AxisTypeface,
             11,
-            labelTextBrush);
+            CurrentPriceLabelTextBrush);
 
         var labelRect = new Rect(
             state.PriceAxisArea.X + 2,
@@ -508,8 +602,47 @@ public sealed class CandleChartControl : Control
         return text == "-0" ? "0" : text;
     }
 
+    private static bool ShouldSampleRenderDiagnostic()
+    {
+        if (!App.Logger.IsDevelopment)
+        {
+            return false;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastRenderDiagnosticAt < RenderDiagnosticSampleInterval)
+        {
+            return false;
+        }
+
+        _lastRenderDiagnosticAt = now;
+        return true;
+    }
+
+    private static void LogRenderDiagnosticIfNeeded(string phase, long elapsedMs, bool sampled, string details)
+    {
+        if (!App.Logger.IsDevelopment)
+        {
+            return;
+        }
+
+        if (!sampled && elapsedMs < SlowRenderThresholdMs)
+        {
+            return;
+        }
+
+        if (!sampled)
+        {
+            _lastRenderDiagnosticAt = DateTimeOffset.UtcNow;
+        }
+
+        App.Logger.Info("KlineDiag", $"{phase} elapsedMs={elapsedMs}, {details}");
+    }
+
     private readonly record struct RenderState(
-        IReadOnlyList<CandleViewPoint> Visible,
+        IReadOnlyList<CandleViewPoint> Candles,
+        int VisibleStartIndex,
+        int VisibleCount,
         Rect PlotArea,
         Rect PriceAxisArea,
         Rect TimeAxisArea,
@@ -518,5 +651,14 @@ public sealed class CandleChartControl : Control
         decimal PriceTickStep,
         double CandleStep,
         double CandleWidth,
-        double RightGap);
+        double RightGap)
+    {
+        public CandleViewPoint FirstVisibleCandle => Candles[VisibleStartIndex];
+        public CandleViewPoint LastVisibleCandle => Candles[VisibleStartIndex + VisibleCount - 1];
+
+        public CandleViewPoint GetVisibleCandle(int visibleIndex)
+        {
+            return Candles[VisibleStartIndex + visibleIndex];
+        }
+    }
 }

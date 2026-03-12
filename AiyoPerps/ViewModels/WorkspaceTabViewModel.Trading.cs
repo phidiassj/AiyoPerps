@@ -5,74 +5,117 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Diagnostics;
 using System.Threading.Tasks;
 
 namespace AiyoPerps.ViewModels;
 
 public sealed partial class WorkspaceTabViewModel
 {
-    private void ApplyAccountSnapshot(VenueAccountSnapshot snapshot)
+    private void ApplyAccountSnapshot(VenueAccountSnapshot snapshot, AccountSnapshotSections sections)
     {
-        var previousStates = new Dictionary<string, PositionState>(_positionStates, StringComparer.OrdinalIgnoreCase);
-        _positionStates.Clear();
-        foreach (var p in snapshot.Positions)
+        var diagnosticSample = ShouldSampleAccountDiagnostic(ref _lastAccountDiagnosticAt);
+        if (diagnosticSample)
         {
-            var markPrice = p.MarkPrice;
-            if (markPrice <= 0 && previousStates.TryGetValue(p.Symbol, out var previous) && previous.MarkPrice > 0)
-            {
-                markPrice = previous.MarkPrice;
-                _logger.Warn("WorkspaceTab", $"Account snapshot markPrice fallback symbol={p.Symbol}, incoming={p.MarkPrice}, fallback={markPrice}");
-            }
-
-            _positionStates[p.Symbol] = new PositionState(
-                p.Symbol,
-                p.Quantity < 0 ? "Short" : "Long",
-                p.NotionalUsd,
-                p.Leverage,
-                p.EntryPrice,
-                markPrice,
-                p.UnrealizedPnlUsd,
-                p.RealizedPnlUsd,
-                p.Quantity);
+            _logger.Info(
+                "AccountDiag",
+                $"apply snapshot begin tabId={TabId}, symbol={Symbol}, sections={sections}, positions={snapshot.Positions.Count}, orders={snapshot.OpenOrders.Count}, balances={snapshot.Balances.Count}");
         }
 
-        RebuildPositionRows();
+        var totalStopwatch = Stopwatch.StartNew();
+        long positionsElapsedMs = 0;
+        long ordersElapsedMs = 0;
+        long balancesElapsedMs = 0;
 
-        CleanupSuppressedCanceledOrderIds();
+        if (sections.HasFlag(AccountSnapshotSections.Positions))
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var previousStates = new Dictionary<string, PositionState>(_positionStates, StringComparer.OrdinalIgnoreCase);
+            _positionStates.Clear();
+            foreach (var p in snapshot.Positions)
+            {
+                var markPrice = p.MarkPrice;
+                if (markPrice <= 0 && previousStates.TryGetValue(p.Symbol, out var previous) && previous.MarkPrice > 0)
+                {
+                    markPrice = previous.MarkPrice;
+                    _logger.Warn("WorkspaceTab", $"Account snapshot markPrice fallback symbol={p.Symbol}, incoming={p.MarkPrice}, fallback={markPrice}");
+                }
 
-        _remotePendingOrders = snapshot.OpenOrders
-            .Where(x => !IsSuppressedCanceledOrderId(x.OrderId))
-            .Where(x => !IsFailedOrderStatus(x.Status))
-            .Select(x => new PendingOrderPanelRow(
-                x.Symbol,
-                $"{NumberText.Trim(x.NotionalUsd, useGrouping: true)} USD",
-                FormatLeverageText(ResolvePendingOrderLeverage(x)),
-                x.LimitPrice.HasValue ? NumberText.Trim(x.LimitPrice.Value) : "-",
-                x.Status,
-                x.OrderId,
-                null,
-                true))
-            .ToList();
+                _positionStates[p.Symbol] = new PositionState(
+                    p.Symbol,
+                    p.Quantity < 0 ? "Short" : "Long",
+                    p.NotionalUsd,
+                    p.Leverage,
+                    p.EntryPrice,
+                    markPrice,
+                    p.UnrealizedPnlUsd,
+                    p.RealizedPnlUsd,
+                    p.Quantity,
+                    p.MarginMode);
+            }
 
-        CleanupSyncedPendingOrders();
-        CleanupTransientPendingOrders();
-        RebuildPendingOrderRows();
+            RebuildPositionRows();
+            stopwatch.Stop();
+            positionsElapsedMs = stopwatch.ElapsedMilliseconds;
+        }
 
-        var balances = snapshot.Balances
-            .GroupBy(x => x.Asset, StringComparer.OrdinalIgnoreCase)
-            .Select(g => new VenueBalance(
-                g.Key.ToUpperInvariant(),
-                g.Sum(x => x.Quantity),
-                g.Sum(x => x.UsdValue)))
-            .Where(x => x.Quantity != 0m)
-            .OrderBy(x => IsStableDisplayAsset(x.Asset) ? 0 : 1)
-            .ThenBy(x => x.Asset, StringComparer.OrdinalIgnoreCase)
-            .Select(x => new BalancePanelRow(
-                x.Asset.ToUpperInvariant(),
-                x.Quantity,
-                x.UsdValue))
-            .ToList();
-        Balances = balances;
+        if (sections.HasFlag(AccountSnapshotSections.Orders))
+        {
+            var stopwatch = Stopwatch.StartNew();
+            CleanupSuppressedCanceledOrderIds();
+
+            _remotePendingOrders = snapshot.OpenOrders
+                .Where(x => !IsSuppressedCanceledOrderId(x.OrderId))
+                .Where(x => !IsFailedOrderStatus(x.Status))
+                .Select(x => new PendingOrderPanelRow(
+                    x.Symbol,
+                    $"{NumberText.Trim(x.NotionalUsd, useGrouping: true)} USD",
+                    FormatLeverageText(ResolvePendingOrderLeverage(x)),
+                    FormatMarginModeText(x.MarginMode),
+                    x.LimitPrice.HasValue ? NumberText.Trim(x.LimitPrice.Value) : "-",
+                    x.Status,
+                    x.OrderId,
+                    null,
+                    true))
+                .ToList();
+
+            CleanupSyncedPendingOrders();
+            CleanupTransientPendingOrders();
+            RebuildPendingOrderRows();
+            stopwatch.Stop();
+            ordersElapsedMs = stopwatch.ElapsedMilliseconds;
+        }
+
+        if (sections.HasFlag(AccountSnapshotSections.Balances))
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var balances = snapshot.Balances
+                .GroupBy(x => x.Asset, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new VenueBalance(
+                    g.Key.ToUpperInvariant(),
+                    g.Sum(x => x.Quantity),
+                    g.Sum(x => x.UsdValue)))
+                .Where(x => x.Quantity != 0m || x.UsdValue != 0m)
+                .OrderBy(x => IsStableDisplayAsset(x.Asset) ? 0 : 1)
+                .ThenBy(x => x.Asset, StringComparer.OrdinalIgnoreCase)
+                .Select(x => new BalancePanelRow(
+                    x.Asset.ToUpperInvariant(),
+                    x.Quantity,
+                    x.UsdValue))
+                .ToList();
+            Balances = balances;
+            stopwatch.Stop();
+            balancesElapsedMs = stopwatch.ElapsedMilliseconds;
+        }
+
+        totalStopwatch.Stop();
+        LogAccountDiagnosticIfNeeded(
+            "apply snapshot end",
+            totalStopwatch.ElapsedMilliseconds,
+            diagnosticSample,
+            SlowAccountApplyMs,
+            ref _lastAccountDiagnosticAt,
+            $"tabId={TabId}, symbol={Symbol}, sections={sections}, positionsMs={positionsElapsedMs}, ordersMs={ordersElapsedMs}, balancesMs={balancesElapsedMs}, positions={snapshot.Positions.Count}, orders={snapshot.OpenOrders.Count}, balances={snapshot.Balances.Count}");
     }
 
     private static bool IsStableDisplayAsset(string asset)
@@ -137,6 +180,16 @@ public sealed partial class WorkspaceTabViewModel
         return leverage > 0
             ? $"{NumberText.Trim(leverage)}x"
             : "-";
+    }
+
+    private static string FormatMarginModeText(MarginMode marginMode)
+    {
+        return marginMode switch
+        {
+            MarginMode.Cross => "Cross",
+            MarginMode.Isolated => "Isolated",
+            _ => "-"
+        };
     }
 
     private decimal ResolvePendingOrderLeverage(VenueOpenOrder order)
@@ -208,18 +261,49 @@ public sealed partial class WorkspaceTabViewModel
 
     private void UpdatePositionMarks(string symbol, decimal markPrice)
     {
+        var diagnosticSample = ShouldSampleKlineDiagnostic(ref _lastPositionDiagnosticAt);
+        if (diagnosticSample)
+        {
+            _logger.Info("KlineDiag", $"position mark begin tabId={TabId}, symbol={symbol}, markPrice={markPrice}, activePositions={_activePositions.Count}, states={_positionStates.Count}");
+        }
+
+        var stopwatch = Stopwatch.StartNew();
         if (markPrice <= 0)
         {
+            stopwatch.Stop();
+            LogKlineDiagnosticIfNeeded(
+                "position mark end",
+                stopwatch.ElapsedMilliseconds,
+                diagnosticSample,
+                SlowPositionUpdateMs,
+                ref _lastPositionDiagnosticAt,
+                $"tabId={TabId}, symbol={symbol}, skipped=invalid-price");
             return;
         }
 
         if (!_positionStates.TryGetValue(symbol, out var existing))
         {
+            stopwatch.Stop();
+            LogKlineDiagnosticIfNeeded(
+                "position mark end",
+                stopwatch.ElapsedMilliseconds,
+                diagnosticSample,
+                SlowPositionUpdateMs,
+                ref _lastPositionDiagnosticAt,
+                $"tabId={TabId}, symbol={symbol}, skipped=no-position");
             return;
         }
 
         if (Math.Abs(existing.MarkPrice - markPrice) < 0.0000001m)
         {
+            stopwatch.Stop();
+            LogKlineDiagnosticIfNeeded(
+                "position mark end",
+                stopwatch.ElapsedMilliseconds,
+                diagnosticSample,
+                SlowPositionUpdateMs,
+                ref _lastPositionDiagnosticAt,
+                $"tabId={TabId}, symbol={symbol}, skipped=unchanged-mark");
             return;
         }
 
@@ -231,10 +315,25 @@ public sealed partial class WorkspaceTabViewModel
             : next.UnrealizedPnlUsd;
         _positionStates[symbol] = next with { UnrealizedPnlUsd = unrealizedUsd };
         RebuildPositionRows();
+        stopwatch.Stop();
+        LogKlineDiagnosticIfNeeded(
+            "position mark end",
+            stopwatch.ElapsedMilliseconds,
+            diagnosticSample,
+            SlowPositionUpdateMs,
+            ref _lastPositionDiagnosticAt,
+            $"tabId={TabId}, symbol={symbol}, activePositions={_activePositions.Count}, markPrice={markPrice}, unrealizedUsd={unrealizedUsd.ToString(CultureInfo.InvariantCulture)}");
     }
 
     private void RebuildPositionRows()
     {
+        var diagnosticSample = ShouldSampleKlineDiagnostic(ref _lastPositionDiagnosticAt);
+        if (diagnosticSample)
+        {
+            _logger.Info("KlineDiag", $"position rows begin tabId={TabId}, states={_positionStates.Count}, activeRows={_activePositions.Count}");
+        }
+
+        var stopwatch = Stopwatch.StartNew();
         var sortedStates = _positionStates.Values
             .OrderBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -292,6 +391,7 @@ public sealed partial class WorkspaceTabViewModel
             row.ApplyState(
                 contractAmount: $"{NumberText.Trim(state.NotionalUsd, useGrouping: true)} USD",
                 leverage: FormatLeverageText(state.Leverage),
+                marginMode: FormatMarginModeText(state.MarginMode),
                 entryPrice: state.EntryPrice,
                 markPrice: state.MarkPrice,
                 unrealizedPnlPct: ComputeUnrealizedPnlPct(state),
@@ -301,6 +401,14 @@ public sealed partial class WorkspaceTabViewModel
 
         RaisePropertyChanged(nameof(HasActivePositions));
         RaisePropertyChanged(nameof(HasNoActivePositions));
+        stopwatch.Stop();
+        LogKlineDiagnosticIfNeeded(
+            "position rows end",
+            stopwatch.ElapsedMilliseconds,
+            diagnosticSample,
+            SlowPositionUpdateMs,
+            ref _lastPositionDiagnosticAt,
+            $"tabId={TabId}, states={sortedStates.Count}, activeRows={_activePositions.Count}");
     }
 
     private void UpsertPendingOrder(PendingOrderState order)
@@ -335,6 +443,7 @@ public sealed partial class WorkspaceTabViewModel
                 x.Symbol,
                 $"{NumberText.Trim(x.NotionalUsd, useGrouping: true)} USD",
                 FormatLeverageText(x.Leverage),
+                FormatMarginModeText(x.MarginMode),
                 x.LimitPrice.HasValue ? NumberText.Trim(x.LimitPrice.Value) : "-",
                 x.Status,
                 x.VenueOrderId,
@@ -527,7 +636,8 @@ public sealed partial class WorkspaceTabViewModel
                 state.Leverage,
                 price,
                 sendingStatus,
-                null));
+                null,
+                state.MarginMode));
 
             try
             {
@@ -543,7 +653,8 @@ public sealed partial class WorkspaceTabViewModel
                 var ack = await _venue.PlaceCloseOrderAsync(row.Symbol, side, closeQty, price, _cts.Token);
                 if (ack.Success)
                 {
-                    if (useLimitPrice)
+                    var keepPendingOrder = ShouldKeepClosePendingOrder(useLimitPrice, ack.Message);
+                    if (keepPendingOrder)
                     {
                         RememberPendingOrderLeverageHint(row.Symbol, state.Leverage, price, notionalForDisplay, ack.ClientOrderId);
                         UpsertPendingOrder(new PendingOrderState(
@@ -553,14 +664,15 @@ public sealed partial class WorkspaceTabViewModel
                             state.Leverage,
                             price,
                             syncedStatus,
-                            ack.ClientOrderId));
+                            ack.ClientOrderId,
+                            state.MarginMode));
                     }
                     else
                     {
                         RemovePendingOrder(localOrderId);
                     }
 
-                    _toastService.ShowInfo(useLimitPrice ? L["Toast_CloseLimitSent"] : L["Toast_CloseMarketSent"]);
+                    ShowCloseSubmitResult(useLimitPrice, ack.Message);
                 }
                 else
                 {
@@ -624,7 +736,8 @@ public sealed partial class WorkspaceTabViewModel
                 state.Leverage,
                 price,
                 "平倉送單中",
-                null));
+                null,
+                state.MarginMode));
 
             try
             {
@@ -638,7 +751,7 @@ public sealed partial class WorkspaceTabViewModel
                     _cts.Token);
 
                 RemovePendingOrder(localOrderId);
-                _toastService.ShowInfo(useLimitPrice ? L["Toast_CloseLimitSent"] : L["Toast_CloseMarketSent"]);
+                ShowCloseSubmitResult(useLimitPrice, TryGetAnonymousProperty(result, "venueMessage"));
                 _ = RefreshAccountStateOnceAsync();
                 _logger.Info("WorkspaceTab", $"ClosePosition(API shared) done tabId={TabId}, symbol={row.Symbol}, useLimit={useLimitPrice}, result={result}");
             }
@@ -654,6 +767,54 @@ public sealed partial class WorkspaceTabViewModel
         {
             EndCloseSubmit(row.Symbol);
         }
+    }
+
+    private string BuildCloseSuccessMessage(bool useLimitPrice, string? venueMessage)
+    {
+        var baseMessage = useLimitPrice ? L["Toast_CloseLimitSent"] : L["Toast_CloseMarketSent"];
+        if (string.IsNullOrWhiteSpace(venueMessage) ||
+            string.Equals(venueMessage.Trim(), "ok", StringComparison.OrdinalIgnoreCase))
+        {
+            return baseMessage;
+        }
+
+        return $"{baseMessage} ({venueMessage.Trim()})";
+    }
+
+    private void ShowCloseSubmitResult(bool useLimitPrice, string? venueMessage)
+    {
+        var message = BuildCloseSuccessMessage(useLimitPrice, venueMessage);
+        if (ContainsIocSemantics(venueMessage))
+        {
+            _toastService.ShowWarning(message);
+            return;
+        }
+
+        _toastService.ShowInfo(message);
+    }
+
+    private static bool ShouldKeepClosePendingOrder(bool useLimitPrice, string? venueMessage)
+    {
+        return useLimitPrice &&
+               !ContainsIocSemantics(venueMessage);
+    }
+
+    private static bool ContainsIocSemantics(string? venueMessage)
+    {
+        return !string.IsNullOrWhiteSpace(venueMessage) &&
+               venueMessage.Contains("IOC", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? TryGetAnonymousProperty(object? source, string propertyName)
+    {
+        if (source is null || string.IsNullOrWhiteSpace(propertyName))
+        {
+            return null;
+        }
+
+        var property = source.GetType().GetProperty(propertyName);
+        var value = property?.GetValue(source);
+        return value?.ToString();
     }
 
     private async Task CancelPendingOrderAsync(PendingOrderPanelRow? row)
