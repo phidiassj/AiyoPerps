@@ -56,11 +56,13 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
     private string? _marketStreamSymbol;
     private bool _isApiSessionManaged;
     private bool _isApplyingApiSession;
+    private bool _isActiveTab;
     private Guid? _apiSessionAccountId;
     private long? _apiSessionCursor;
     private Task? _apiSessionPumpTask;
     private DateTimeOffset _lastSharedLockToastAt;
     private int _hasPendingMarketUiFlush;
+    private int _foregroundCandleCatchUpInFlight;
 
     private AccountProfile? _selectedAccount;
     private bool _isConfigured;
@@ -115,6 +117,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
     private readonly HashSet<string> _closingSymbolsInFlight = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _closeSubmitLock = new();
     private DateTimeOffset? _pendingUiEventTimestamp;
+    private DateTimeOffset? _latestMarketEventTimestamp;
     private decimal? _pendingUiMidPrice;
     private string? _pendingUiSymbol;
     private string? _pendingUiCandleStatus;
@@ -133,18 +136,22 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
     private DateTimeOffset _lastPositionDiagnosticAt;
     private DateTimeOffset _lastAccountDiagnosticAt;
     private DateTimeOffset _lastOrderBookUiAppliedAt;
+    private DateTimeOffset _lastOrderBookUiSignalAt;
     private DateTimeOffset _lastPositionUiAppliedAt;
     private DateTimeOffset _lastBalanceUiAppliedAt;
     private int _forceBalanceRefreshPending;
     private const int MaxPendingUiRecentTrades = 32;
     private static readonly TimeSpan MarketUiFlushInterval = TimeSpan.FromMilliseconds(33);
+    private static readonly TimeSpan InactiveMarketUiFlushInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan OpenCandlePersistInterval = TimeSpan.FromMilliseconds(900);
     private static readonly TimeSpan MarketMetricsLogInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan KlineDiagnosticSampleInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan OrderBookUiRefreshInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan InactiveOrderBookUiSignalInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PositionUiRefreshInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan PositionsOrdersSnapshotInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan BalanceSnapshotInterval = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan ForegroundCandleCatchUpTimeout = TimeSpan.FromSeconds(10);
     private const long SlowKlineDataUpdateMs = 4;
     private const long SlowKlineUiUpdateMs = 8;
     private const long SlowPositionUpdateMs = 6;
@@ -224,6 +231,11 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
     public WorkspaceBinding? Binding { get; private set; }
     public ObservableCollection<AccountProfile> AvailableAccounts { get; }
     public ObservableCollection<SymbolOptionItem> SymbolOptions { get; }
+    public bool IsActiveTab
+    {
+        get => _isActiveTab;
+        private set => SetProperty(ref _isActiveTab, value);
+    }
 
     public ICommand ConfirmActivationCommand { get; }
     public ICommand SubmitOrderCommand { get; }
@@ -1863,7 +1875,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                await Task.Delay(MarketUiFlushInterval, cancellationToken);
+                await Task.Delay(GetMarketUiFlushInterval(), cancellationToken);
                 if (Interlocked.Exchange(ref _hasPendingMarketUiFlush, 0) == 0)
                 {
                     continue;
@@ -1886,6 +1898,11 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
     {
         lock (_marketUiLock)
         {
+            if (!_latestMarketEventTimestamp.HasValue || timestamp > _latestMarketEventTimestamp.Value)
+            {
+                _latestMarketEventTimestamp = timestamp;
+            }
+
             if (!_pendingUiEventTimestamp.HasValue || timestamp > _pendingUiEventTimestamp.Value)
             {
                 _pendingUiEventTimestamp = timestamp;
@@ -1909,9 +1926,48 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
     private void ResetRefreshCadenceState()
     {
         _lastOrderBookUiAppliedAt = DateTimeOffset.MinValue;
+        _lastOrderBookUiSignalAt = DateTimeOffset.MinValue;
         _lastPositionUiAppliedAt = DateTimeOffset.MinValue;
         _lastBalanceUiAppliedAt = DateTimeOffset.MinValue;
         Interlocked.Exchange(ref _forceBalanceRefreshPending, 0);
+    }
+
+    internal void SetActiveState(bool isActive)
+    {
+        if (IsActiveTab == isActive)
+        {
+            return;
+        }
+
+        IsActiveTab = isActive;
+        _lastOrderBookUiSignalAt = DateTimeOffset.MinValue;
+
+        if (!isActive)
+        {
+            return;
+        }
+
+        _lastOrderBookUiAppliedAt = DateTimeOffset.MinValue;
+        _lastPositionUiAppliedAt = DateTimeOffset.MinValue;
+        ApplyLatestForegroundMarketState();
+        RefreshCurrentCandleFromCache();
+
+        var midPrice = TryGetLiveOrderBookMidPrice() ?? _lastMidPrice;
+        if (midPrice.HasValue && midPrice.Value > 0)
+        {
+            UpdateOrderBookSnapshot(midPrice.Value);
+            UpdatePositionMarks(Symbol, midPrice.Value);
+            var now = DateTimeOffset.UtcNow;
+            _lastOrderBookUiAppliedAt = now;
+            _lastPositionUiAppliedAt = now;
+        }
+
+        if (Interlocked.Exchange(ref _hasPendingMarketUiFlush, 0) == 1)
+        {
+            FlushPendingMarketUiUpdates();
+        }
+
+        StartForegroundCandleCatchUp();
     }
 
     private void RequestBalanceRefresh()
@@ -1978,17 +2034,14 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             _pendingUiRecentTrades.Clear();
         }
 
-        if (pendingTimestamp.HasValue)
+        var latestVisibleEventTimestamp = pendingTimestamp ?? GetLatestMarketEventTimestamp();
+        if (latestVisibleEventTimestamp.HasValue)
         {
-            LastMarketEventAt = pendingTimestamp;
-            var venueId = _venue?.VenueId ?? Binding?.VenueId;
-            if (!string.IsNullOrWhiteSpace(venueId))
-            {
-                ConnectionStatus = $"Connected ({venueId})";
-            }
+            ApplyLatestMarketEventState(latestVisibleEventTimestamp.Value);
         }
 
         var now = DateTimeOffset.UtcNow;
+        var isActive = IsActiveTab;
         var midPrice = pendingMidPrice ?? TryGetLiveOrderBookMidPrice() ?? _lastMidPrice;
         var shouldRefreshOrderBook = refreshOrderBook;
         if (!shouldRefreshOrderBook && pendingMidPrice.HasValue && ShouldRefreshSyntheticOrderBook())
@@ -1996,7 +2049,8 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             shouldRefreshOrderBook = true;
         }
 
-        if (shouldRefreshOrderBook &&
+        if (isActive &&
+            shouldRefreshOrderBook &&
             midPrice.HasValue &&
             midPrice.Value > 0 &&
             now - _lastOrderBookUiAppliedAt >= OrderBookUiRefreshInterval)
@@ -2005,7 +2059,8 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             _lastOrderBookUiAppliedAt = now;
         }
 
-        if (!string.IsNullOrWhiteSpace(pendingSymbol) &&
+        if (isActive &&
+            !string.IsNullOrWhiteSpace(pendingSymbol) &&
             pendingMidPrice.HasValue &&
             pendingMidPrice.Value > 0 &&
             now - _lastPositionUiAppliedAt >= PositionUiRefreshInterval)
@@ -2014,7 +2069,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             _lastPositionUiAppliedAt = now;
         }
 
-        if (pendingTrades.Count > 0)
+        if (isActive && pendingTrades.Count > 0)
         {
             foreach (var trade in pendingTrades.OrderBy(x => x.Timestamp))
             {
@@ -2022,13 +2077,13 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(pendingCandleStatus))
+        if (isActive && !string.IsNullOrWhiteSpace(pendingCandleStatus))
         {
             CandleStatus = pendingCandleStatus;
         }
 
         long candleSeriesRefreshElapsedMs = 0;
-        if (refreshCandleSeries)
+        if (isActive && refreshCandleSeries)
         {
             var seriesStopwatch = Stopwatch.StartNew();
             UpdateCandleSeriesFromCache();
@@ -2045,7 +2100,70 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             diagnosticSample,
             SlowKlineUiUpdateMs,
             ref _lastKlineUiDiagnosticAt,
-            $"tabId={TabId}, symbol={Symbol}, interval={SelectedInterval}, refreshCandleSeries={refreshCandleSeries}, candleSeriesMs={candleSeriesRefreshElapsedMs}, refreshOrderBook={shouldRefreshOrderBook}, trades={pendingTrades.Count}, queueDepth={pendingQueueDepth}, candleStatusPending={!string.IsNullOrWhiteSpace(pendingCandleStatus)}");
+            $"tabId={TabId}, symbol={Symbol}, interval={SelectedInterval}, isActive={isActive}, refreshCandleSeries={refreshCandleSeries}, candleSeriesMs={candleSeriesRefreshElapsedMs}, refreshOrderBook={shouldRefreshOrderBook}, trades={pendingTrades.Count}, queueDepth={pendingQueueDepth}, candleStatusPending={!string.IsNullOrWhiteSpace(pendingCandleStatus)}");
+    }
+
+    private TimeSpan GetMarketUiFlushInterval()
+    {
+        return IsActiveTab
+            ? MarketUiFlushInterval
+            : InactiveMarketUiFlushInterval;
+    }
+
+    private DateTimeOffset? GetLatestMarketEventTimestamp()
+    {
+        lock (_marketUiLock)
+        {
+            return _latestMarketEventTimestamp;
+        }
+    }
+
+    private void ApplyLatestForegroundMarketState()
+    {
+        var latestTimestamp = GetLatestMarketEventTimestamp();
+        if (latestTimestamp.HasValue)
+        {
+            ApplyLatestMarketEventState(latestTimestamp.Value);
+        }
+    }
+
+    private void ApplyLatestMarketEventState(DateTimeOffset timestamp)
+    {
+        if (!LastMarketEventAt.HasValue || timestamp >= LastMarketEventAt.Value)
+        {
+            LastMarketEventAt = timestamp;
+        }
+
+        var venueId = _venue?.VenueId ?? Binding?.VenueId;
+        if (!string.IsNullOrWhiteSpace(venueId))
+        {
+            ConnectionStatus = $"Connected ({venueId})";
+        }
+    }
+
+    private void SignalMarketUiFlush(bool orderBookOnly = false)
+    {
+        if (!orderBookOnly)
+        {
+            Interlocked.Exchange(ref _hasPendingMarketUiFlush, 1);
+            return;
+        }
+
+        lock (_marketUiLock)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var interval = IsActiveTab
+                ? OrderBookUiRefreshInterval
+                : InactiveOrderBookUiSignalInterval;
+            if (now - _lastOrderBookUiSignalAt < interval)
+            {
+                return;
+            }
+
+            _lastOrderBookUiSignalAt = now;
+        }
+
+        Interlocked.Exchange(ref _hasPendingMarketUiFlush, 1);
     }
 
     private bool ShouldSampleKlineDiagnostic(ref DateTimeOffset lastAt)

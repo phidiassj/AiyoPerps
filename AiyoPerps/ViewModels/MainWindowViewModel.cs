@@ -79,7 +79,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
     public WorkspaceTabViewModel? SelectedTab
     {
         get => _selectedTab;
-        set => SetProperty(ref _selectedTab, value);
+        set
+        {
+            if (ReferenceEquals(_selectedTab, value))
+            {
+                return;
+            }
+
+            var previous = _selectedTab;
+            if (SetProperty(ref _selectedTab, value))
+            {
+                previous?.SetActiveState(false);
+                value?.SetActiveState(true);
+            }
+        }
     }
 
     public ICommand AddTabCommand { get; }

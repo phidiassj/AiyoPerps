@@ -29,10 +29,12 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
     private readonly HashSet<string> _unknownBalanceAssetLogged = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _assetScaleGate = new(1, 1);
     private readonly SemaphoreSlim _instrumentSpecGate = new(1, 1);
+    private static readonly TimeSpan WsReconnectDelay = TimeSpan.FromSeconds(2);
 
     private ClientWebSocket? _ws;
     private CancellationTokenSource? _wsCts;
     private Task? _wsTask;
+    private string? _subscribedSymbol;
     private Dictionary<string, int> _assetScaleByCurrency = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset _assetScaleFetchedAt = DateTimeOffset.MinValue;
     private readonly Dictionary<string, (BitMexInstrumentSpec Spec, DateTimeOffset At)> _instrumentSpecCache = new(StringComparer.OrdinalIgnoreCase);
@@ -55,18 +57,12 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
     {
         await DisconnectMarketDataAsync(cancellationToken);
 
-        var symbol = subscriptions.FirstOrDefault() ?? "XBTUSD";
-        var url = $"{_wsBase}?subscribe=trade:{symbol},instrument:{symbol}";
-        _logger.Info("BitMEX", $"Connecting WS: {url}");
-
-        _ws = new ClientWebSocket();
-        _ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+        var symbol = (subscriptions.FirstOrDefault() ?? "XBTUSD").Trim().ToUpperInvariant();
+        _subscribedSymbol = symbol;
         _wsCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        await _ws.ConnectAsync(new Uri(url), _wsCts.Token);
-        _logger.Info("BitMEX", "WS connected");
-
-        _wsTask = Task.Run(() => ReceiveLoopAsync(_ws, _wsCts.Token), _wsCts.Token);
+        await EnsureWebSocketConnectedAsync(symbol, _wsCts.Token);
+        _wsTask = Task.Run(() => ReceiveLoopAsync(symbol, _wsCts.Token), _wsCts.Token);
     }
 
     public async Task DisconnectMarketDataAsync(CancellationToken cancellationToken = default)
@@ -113,6 +109,7 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
 
         _wsCts?.Dispose();
         _wsCts = null;
+        _subscribedSymbol = null;
     }
 
     public async Task<(bool IsSuccess, string Message)> ConfigureLeverageAsync(string symbol, decimal leverage, MarginMode marginMode, CancellationToken cancellationToken = default)
@@ -408,62 +405,149 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
         _httpClient.Dispose();
     }
 
-    private async Task ReceiveLoopAsync(ClientWebSocket ws, CancellationToken cancellationToken)
+    private async Task ReceiveLoopAsync(string symbol, CancellationToken cancellationToken)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
         var messageCount = 0;
 
         try
         {
-            while (!cancellationToken.IsCancellationRequested && ws.State == WebSocketState.Open)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                using var payload = new MemoryStream();
-                WebSocketReceiveResult result;
-                do
+                var ws = _ws;
+                if (ws is null || ws.State != WebSocketState.Open)
                 {
-                    result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
-                    if (result.MessageType == WebSocketMessageType.Close)
+                    await EnsureWebSocketConnectedAsync(symbol, cancellationToken);
+                    ws = _ws;
+                    if (ws is null)
                     {
-                        _logger.Warn("BitMEX", "WS received close frame");
-                        return;
-                    }
-
-                    if (result.Count > 0)
-                    {
-                        payload.Write(buffer, 0, result.Count);
+                        await Task.Delay(WsReconnectDelay, cancellationToken);
+                        continue;
                     }
                 }
-                while (!result.EndOfMessage);
 
-                if (payload.Length == 0)
+                var shouldReconnect = false;
+                try
+                {
+                    while (!cancellationToken.IsCancellationRequested &&
+                           ReferenceEquals(ws, _ws) &&
+                           ws.State == WebSocketState.Open)
+                    {
+                        using var payload = new MemoryStream();
+                        WebSocketReceiveResult result;
+                        do
+                        {
+                            result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
+                            if (result.MessageType == WebSocketMessageType.Close)
+                            {
+                                _logger.Warn("BitMEX", "WS received close frame");
+                                shouldReconnect = true;
+                                break;
+                            }
+
+                            if (result.Count > 0)
+                            {
+                                payload.Write(buffer, 0, result.Count);
+                            }
+                        }
+                        while (!result.EndOfMessage);
+
+                        if (shouldReconnect)
+                        {
+                            break;
+                        }
+
+                        if (payload.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        var json = Encoding.UTF8.GetString(payload.GetBuffer(), 0, (int)payload.Length);
+                        ParseMessage(json);
+                        _channel.Writer.TryWrite(new VenueHeartbeat(DateTimeOffset.UtcNow, "ws_message"));
+
+                        messageCount++;
+                        if (messageCount % 50 == 0)
+                        {
+                            _logger.Info("BitMEX", $"WS processed messages={messageCount}");
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    _logger.Info("BitMEX", "WS receive loop canceled");
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    shouldReconnect = true;
+                    _logger.Error("BitMEX", "WS receive loop exception", ex);
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                if (!shouldReconnect)
+                {
+                    shouldReconnect = ws.State != WebSocketState.Open || !ReferenceEquals(ws, _ws);
+                }
+
+                if (!shouldReconnect)
                 {
                     continue;
                 }
 
-                var json = Encoding.UTF8.GetString(payload.GetBuffer(), 0, (int)payload.Length);
-                ParseMessage(json);
-                _channel.Writer.TryWrite(new VenueHeartbeat(DateTimeOffset.UtcNow, "ws_message"));
-
-                messageCount++;
-                if (messageCount % 50 == 0)
+                if (ReferenceEquals(_ws, ws))
                 {
-                    _logger.Info("BitMEX", $"WS processed messages={messageCount}");
+                    try
+                    {
+                        ws.Dispose();
+                    }
+                    catch
+                    {
+                    }
+
+                    _ws = null;
                 }
+
+                _logger.Warn("BitMEX", $"WS reconnect scheduled symbol={symbol}, delayMs={(int)WsReconnectDelay.TotalMilliseconds}");
+                await Task.Delay(WsReconnectDelay, cancellationToken);
             }
-        }
-        catch (OperationCanceledException)
-        {
-            _logger.Info("BitMEX", "WS receive loop canceled");
-        }
-        catch (Exception ex)
-        {
-            _logger.Error("BitMEX", "WS receive loop exception", ex);
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
             _logger.Info("BitMEX", "WS receive loop exited");
         }
+    }
+
+    private async Task EnsureWebSocketConnectedAsync(string symbol, CancellationToken cancellationToken)
+    {
+        if (_ws is { State: WebSocketState.Open })
+        {
+            return;
+        }
+
+        var url = $"{_wsBase}?subscribe=trade:{symbol},instrument:{symbol}";
+        _logger.Info("BitMEX", $"Connecting WS: {url}");
+
+        var ws = new ClientWebSocket();
+        ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+
+        try
+        {
+            await ws.ConnectAsync(new Uri(url), cancellationToken);
+        }
+        catch
+        {
+            ws.Dispose();
+            throw;
+        }
+
+        _ws = ws;
+        _logger.Info("BitMEX", $"WS connected symbol={symbol}");
     }
 
     private async Task<IReadOnlyList<VenuePosition>> FetchPositionsAsync(decimal xbtUsd, CancellationToken cancellationToken)

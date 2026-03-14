@@ -1,6 +1,7 @@
 using AiyoPerps.Core;
 using AiyoPerps.Models;
 using AiyoPerps.Services;
+using Avalonia.Threading;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -171,7 +172,7 @@ public sealed partial class WorkspaceTabViewModel
             _pendingUiOrderBookRefresh |= shouldRefreshOrderBook;
         }
 
-        Interlocked.Exchange(ref _hasPendingMarketUiFlush, 1);
+        SignalMarketUiFlush();
     }
 
     private void QueueRecentTradeUiUpdate(TradeTick tick)
@@ -187,7 +188,7 @@ public sealed partial class WorkspaceTabViewModel
         }
 
         Interlocked.Increment(ref _marketUiQueuedTradeCount);
-        Interlocked.Exchange(ref _hasPendingMarketUiFlush, 1);
+        SignalMarketUiFlush();
     }
 
     private void QueueCandleUiUpdate(Candle candle)
@@ -198,7 +199,7 @@ public sealed partial class WorkspaceTabViewModel
             _pendingUiCandleSeriesRefresh = true;
         }
 
-        Interlocked.Exchange(ref _hasPendingMarketUiFlush, 1);
+        SignalMarketUiFlush();
     }
 
     private void QueueLiveOrderBookUiRefresh()
@@ -216,7 +217,7 @@ public sealed partial class WorkspaceTabViewModel
         }
 
         Interlocked.Increment(ref _marketUiQueuedOrderBookCount);
-        Interlocked.Exchange(ref _hasPendingMarketUiFlush, 1);
+        SignalMarketUiFlush(orderBookOnly: true);
     }
 
     private bool ShouldRefreshSyntheticOrderBook()
@@ -232,6 +233,7 @@ public sealed partial class WorkspaceTabViewModel
         lock (_marketUiLock)
         {
             _pendingUiEventTimestamp = null;
+            _latestMarketEventTimestamp = null;
             _pendingUiMidPrice = null;
             _pendingUiSymbol = null;
             _pendingUiCandleStatus = null;
@@ -241,6 +243,7 @@ public sealed partial class WorkspaceTabViewModel
         }
 
         Interlocked.Exchange(ref _hasPendingMarketUiFlush, 0);
+        Interlocked.Exchange(ref _foregroundCandleCatchUpInFlight, 0);
     }
 
     private void ResetLiveOrderBook()
@@ -503,6 +506,113 @@ public sealed partial class WorkspaceTabViewModel
         UpdateCandleSeriesFromCache();
     }
 
+    private void StartForegroundCandleCatchUp()
+    {
+        if (!IsConfigured || Binding is null || _venue is not IHistoricalCandleProvider)
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _foregroundCandleCatchUpInFlight, 1, 0) != 0)
+        {
+            return;
+        }
+
+        var venueId = Binding.VenueId;
+        var symbol = Symbol;
+        var interval = ParseInterval(SelectedInterval);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await CatchUpRecentCandlesOnForegroundAsync(venueId, symbol, interval, _cts.Token);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _foregroundCandleCatchUpInFlight, 0);
+            }
+        }, _cts.Token);
+    }
+
+    private async Task CatchUpRecentCandlesOnForegroundAsync(
+        string venueId,
+        string symbol,
+        CandleInterval interval,
+        CancellationToken cancellationToken)
+    {
+        if (_venue is not IHistoricalCandleProvider provider)
+        {
+            return;
+        }
+
+        DateTimeOffset? latestLocalOpenTime;
+        lock (_candleLock)
+        {
+            latestLocalOpenTime = _candleCache.Get(venueId, symbol, interval).LastOrDefault()?.OpenTime;
+        }
+
+        var latestMarketEventAt = GetLatestMarketEventTimestamp();
+        var fetchCount = CalculateForegroundCatchUpCount(interval);
+        _logger.Info(
+            "KlineDiag",
+            $"foreground catch-up begin tabId={TabId}, symbol={symbol}, interval={interval}, fetchCount={fetchCount}, latestLocalOpen={(latestLocalOpenTime?.ToString("O") ?? "none")}, latestEvent={(latestMarketEventAt?.ToString("O") ?? "none")}");
+
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(ForegroundCandleCatchUpTimeout);
+            var recent = await provider.GetRecentCandlesAsync(symbol, interval, fetchCount, timeoutCts.Token);
+            var orderedCandles = recent
+                .Where(c => string.Equals(c.VenueId, venueId, StringComparison.OrdinalIgnoreCase) &&
+                            string.Equals(c.Symbol, symbol, StringComparison.OrdinalIgnoreCase) &&
+                            c.Interval == interval)
+                .OrderBy(c => c.OpenTime)
+                .ToList();
+
+            DateTimeOffset? latestMergedOpenTime;
+            lock (_candleLock)
+            {
+                foreach (var candle in orderedCandles)
+                {
+                    _candleCache.Upsert(candle);
+                    _candleRepository.Upsert(candle);
+                }
+
+                var merged = _candleCache.Get(venueId, symbol, interval);
+                latestMergedOpenTime = merged.LastOrDefault()?.OpenTime;
+                _currentCandle = merged.LastOrDefault();
+            }
+
+            _logger.Info(
+                "KlineDiag",
+                $"foreground catch-up end tabId={TabId}, symbol={symbol}, interval={interval}, fetched={orderedCandles.Count}, latestLocalOpen={(latestLocalOpenTime?.ToString("O") ?? "none")}, latestMergedOpen={(latestMergedOpenTime?.ToString("O") ?? "none")}");
+
+            if (!IsActiveTab || Binding?.VenueId != venueId || !string.Equals(Symbol, symbol, StringComparison.OrdinalIgnoreCase) || ParseInterval(SelectedInterval) != interval)
+            {
+                return;
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                ApplyLatestForegroundMarketState();
+                RefreshCurrentCandleFromCache();
+
+                if (Interlocked.Exchange(ref _hasPendingMarketUiFlush, 0) == 1)
+                {
+                    FlushPendingMarketUiUpdates();
+                }
+            }, DispatcherPriority.Render, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _logger.Info("KlineDiag", $"foreground catch-up canceled tabId={TabId}, symbol={symbol}, interval={interval}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn("KlineDiag", $"foreground catch-up failed tabId={TabId}, symbol={symbol}, interval={interval}: {ex.Message}");
+        }
+    }
+
     private static CandleInterval ParseInterval(string interval)
     {
         return interval switch
@@ -521,6 +631,12 @@ public sealed partial class WorkspaceTabViewModel
             "30d" => CandleInterval.D30,
             _ => CandleInterval.M5
         };
+    }
+
+    private static int CalculateForegroundCatchUpCount(CandleInterval interval)
+    {
+        var intervalHours = Math.Max(1.0 / 60.0, IntervalToHours(interval));
+        return Math.Clamp((int)Math.Ceiling(6d / intervalHours) + 8, 48, 160);
     }
 
     private static string FormatCandleStatus(Candle candle)
