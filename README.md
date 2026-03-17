@@ -13,9 +13,13 @@ If you think this project is cool, feel free to [**buy us a coffee**](https://ut
 That’s because [Chen-Si Studio](https://utunote.com) is a team that pays taxes properly. We issue an official receipt/invoice for every bit of income, and those invoice numbers can be checked for prizes every two months.<br>
 Even if you don’t live in Taiwan, if your invoice wins, just let us know. We’ll claim the prize for you and then send you the money (after deducting any necessary handling fees).
 
-## 0. Supported trading platform
+## Recent Updates
+- Added support for the [dYdX](https://dydx.trade/) exchange.
+- Optimized candlestick chart display efficiency and resource consumption.
+
+## 0. Latest update
 - CEX: [BitMEX](https://www.bitmex.com/)
-- DEX: [Hyperliquid](https://app.hyperliquid.xyz/)、[Aster](https://www.asterdex.com/)、[Grvt](https://grvt.io/)
+- DEX: [Hyperliquid](https://app.hyperliquid.xyz/)', [Aster](https://www.asterdex.com/), [Grvt](https://grvt.io/), [dYdX](https://dydx.trade/)
 
 ## 1. Requirements
 - Windows, Linux, or macOS (via Docker).

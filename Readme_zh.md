@@ -13,9 +13,13 @@ AiyoPerps 是一套同時支援 CEX (中心化) 與 DEX (去中心化) 的永續
 因為[宸泗工作室](https://utunote.com)是誠實納稅的團隊，我們的每一筆收入都會開立發票，發票號碼每兩個月可以兌獎一次。<br>
 即使你不是台灣的居民，如果你中獎了，請通知我們。我們會幫你兌獎之後(扣除必要的手續費)匯款給你。
 
+## 近期更新
+- 新增支援 [dYdX](https://dydx.trade/) 交易所。
+- 優化 K 線圖顯示效率及佔用資源。
+
 ## 0. 支援的交易平台
 - CEX: [BitMEX](https://www.bitmex.com/)
-- DEX: [Hyperliquid](https://app.hyperliquid.xyz/)、[Aster](https://www.asterdex.com/)、[Grvt](https://grvt.io/)
+- DEX: [Hyperliquid](https://app.hyperliquid.xyz/)、[Aster](https://www.asterdex.com/)、[Grvt](https://grvt.io/)、[dYdX](https://dydx.trade/)
 
 ## 1. 環境需求
 - Windows、Linux、MacOS (透過 docker)。
