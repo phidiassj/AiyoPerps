@@ -14,8 +14,13 @@ AiyoPerps 是一套同時支援 CEX (中心化) 與 DEX (去中心化) 的永續
 即使你不是台灣的居民，如果你中獎了，請通知我們。我們會幫你兌獎之後(扣除必要的手續費)匯款給你。
 
 ## 近期更新
-- 新增支援 [dYdX](https://dydx.trade/) 交易所。
-- 優化 K 線圖顯示效率及佔用資源。
+- 新增 **Dashboard** 介面，現在在同一個介面就可以管理所有交易所的所有持倉及掛單。
+
+![Dashboard](./images/screen01_zh.jpg)
+
+- 新增**固定時間主動喚醒 AI Agent** 功能，支援 [Codex CLI](https://developers.openai.com/codex/cli)、[Claude Code CLI](https://code.claude.com/docs/zh-TW/cli-reference)、[Gemini CLI](https://geminicli.com/)。
+
+![AI Agent Setting](./images/screen02_zh.jpg)
 
 ## 0. 支援的交易平台
 - CEX: [BitMEX](https://www.bitmex.com/)

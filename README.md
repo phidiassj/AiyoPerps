@@ -14,12 +14,17 @@ That’s because [Chen-Si Studio](https://utunote.com) is a team that pays taxes
 Even if you don’t live in Taiwan, if your invoice wins, just let us know. We’ll claim the prize for you and then send you the money (after deducting any necessary handling fees).
 
 ## Recent Updates
-- Added support for the [dYdX](https://dydx.trade/) exchange.
-- Optimized candlestick chart display efficiency and resource consumption.
+- Added a **Dashboard** interface, allowing you to manage all your positions and open orders across all exchanges from a single interface.
+
+![Dashboard](./images/screen01_en.jpg)
+
+- Added a feature to **automatically wake up the AI ​​Agent** at fixed intervals, supporting [Codex CLI](https://developers.openai.com/codex/cli), [Claude Code CLI](https://code.claude.com/docs/en/cli-reference), and [Gemini CLI](https://geminicli.com/).
+
+![AI Agent Setting](./images/screen02_en.jpg)
 
 ## 0. Latest update
 - CEX: [BitMEX](https://www.bitmex.com/)
-- DEX: [Hyperliquid](https://app.hyperliquid.xyz/)', [Aster](https://www.asterdex.com/), [Grvt](https://grvt.io/), [dYdX](https://dydx.trade/)
+- DEX: [Hyperliquid](https://app.hyperliquid.xyz/), [Aster](https://www.asterdex.com/), [Grvt](https://grvt.io/), [dYdX](https://dydx.trade/)
 
 ## 1. Requirements
 - Windows, Linux, or macOS (via Docker).
