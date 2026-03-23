@@ -1,0 +1,851 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <!-- 
+    Microsoft ResX Schema 
+    
+    Version 2.0
+    
+    The primary goals of this format is to allow a simple XML format 
+    that is mostly human readable. The generation and parsing of the 
+    various data types are done through the TypeConverter classes 
+    associated with the data types.
+    
+    Example:
+    
+    ... ado.net/XML headers & schema ...
+    <resheader name="resmimetype">text/microsoft-resx</resheader>
+    <resheader name="version">2.0</resheader>
+    <resheader name="reader">System.Resources.ResXResourceReader, System.Windows.Forms, ...</resheader>
+    <resheader name="writer">System.Resources.ResXResourceWriter, System.Windows.Forms, ...</resheader>
+    <data name="Name1"><value>this is my long string</value><comment>this is a comment</comment></data>
+    <data name="Color1" type="System.Drawing.Color, System.Drawing">Blue</data>
+    <data name="Bitmap1" mimetype="application/x-microsoft.net.object.binary.base64">
+        <value>[base64 mime encoded serialized .NET Framework object]</value>
+    </data>
+    <data name="Icon1" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
+        <value>[base64 mime encoded string representing a byte array form of the .NET Framework object]</value>
+        <comment>This is a comment</comment>
+    </data>
+                
+    There are any number of "resheader" rows that contain simple 
+    name/value pairs.
+    
+    Each data row contains a name, and value. The row also contains a 
+    type or mimetype. Type corresponds to a .NET class that support 
+    text/value conversion through the TypeConverter architecture. 
+    Classes that don't support this are serialized and stored with the 
+    mimetype set.
+    
+    The mimetype is used for serialized objects, and tells the 
+    ResXResourceReader how to depersist the object. This is currently not 
+    extensible. For a given mimetype the value must be set accordingly:
+    
+    Note - application/x-microsoft.net.object.binary.base64 is the format 
+    that the ResXResourceWriter will generate, however the reader can 
+    read any of the formats listed below.
+    
+    mimetype: application/x-microsoft.net.object.binary.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Binary.BinaryFormatter
+            : and then encoded with base64 encoding.
+    
+    mimetype: application/x-microsoft.net.object.soap.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Soap.SoapFormatter
+            : and then encoded with base64 encoding.
+
+    mimetype: application/x-microsoft.net.object.bytearray.base64
+    value   : The object must be serialized into a byte array 
+            : using a System.ComponentModel.TypeConverter
+            : and then encoded with base64 encoding.
+    -->
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="metadata">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" />
+              <xsd:attribute name="type" type="xsd:string" />
+              <xsd:attribute name="mimetype" type="xsd:string" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="assembly">
+            <xsd:complexType>
+              <xsd:attribute name="alias" type="xsd:string" />
+              <xsd:attribute name="name" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="Main_AddTab" xml:space="preserve">
+    <value>+ 新增 Tab</value>
+  </data>
+  <data name="Main_AccountManager" xml:space="preserve">
+    <value>帳號管理</value>
+  </data>
+  <data name="Main_NewWindow" xml:space="preserve">
+    <value>新視窗</value>
+  </data>
+  <data name="Main_Language" xml:space="preserve">
+    <value>語言</value>
+  </data>
+  <data name="Main_AccountWallet" xml:space="preserve">
+    <value>平台帳號/錢包</value>
+  </data>
+  <data name="Main_Enable" xml:space="preserve">
+    <value>確認啟用</value>
+  </data>
+  <data name="Main_Symbol" xml:space="preserve">
+    <value>合約</value>
+  </data>
+  <data name="Main_Interval" xml:space="preserve">
+    <value>時間單位</value>
+  </data>
+  <data name="Main_Status" xml:space="preserve">
+    <value>狀態</value>
+  </data>
+  <data name="Main_LastEvent" xml:space="preserve">
+    <value>最後事件</value>
+  </data>
+  <data name="Main_RefreshData" xml:space="preserve">
+    <value>資料重整</value>
+  </data>
+  <data name="Chart_Title" xml:space="preserve">
+    <value>K 線蠟燭圖</value>
+  </data>
+  <data name="OrderBook_Title" xml:space="preserve">
+    <value>委託簿</value>
+  </data>
+  <data name="OrderBook_TickSize" xml:space="preserve">
+    <value>級距</value>
+  </data>
+  <data name="OrderBook_Price" xml:space="preserve">
+    <value>Price</value>
+  </data>
+  <data name="OrderBook_Size" xml:space="preserve">
+    <value>Size</value>
+  </data>
+  <data name="OrderBook_Total" xml:space="preserve">
+    <value>Total</value>
+  </data>
+  <data name="OrderBook_RecentTrades" xml:space="preserve">
+    <value>最新交易</value>
+  </data>
+  <data name="OrderBook_Time" xml:space="preserve">
+    <value>Time</value>
+  </data>
+  <data name="OrderBook_Side" xml:space="preserve">
+    <value>方向</value>
+  </data>
+  <data name="Trade_Side_Buy" xml:space="preserve">
+    <value>買</value>
+  </data>
+  <data name="Trade_Side_Sell" xml:space="preserve">
+    <value>賣</value>
+  </data>
+  <data name="Trade_Side_Flat" xml:space="preserve">
+    <value>平</value>
+  </data>
+  <data name="OrderPanel_Tab_Order" xml:space="preserve">
+    <value>下單</value>
+  </data>
+  <data name="OrderPanel_Tab_Positions" xml:space="preserve">
+    <value>持倉</value>
+  </data>
+  <data name="OrderPanel_Tab_Orders" xml:space="preserve">
+    <value>訂單</value>
+  </data>
+  <data name="OrderPanel_Tab_Balances" xml:space="preserve">
+    <value>餘額</value>
+  </data>
+  <data name="OrderPanel_OrderType" xml:space="preserve">
+    <value>下單類型</value>
+  </data>
+  <data name="OrderPanel_Action" xml:space="preserve">
+    <value>操作方式</value>
+  </data>
+  <data name="OrderType_Market" xml:space="preserve">
+    <value>市價單</value>
+  </data>
+  <data name="OrderType_Limit" xml:space="preserve">
+    <value>限價單</value>
+  </data>
+  <data name="OrderSide_Long" xml:space="preserve">
+    <value>做多</value>
+  </data>
+  <data name="OrderSide_Short" xml:space="preserve">
+    <value>做空</value>
+  </data>
+  <data name="OrderPanel_Leverage" xml:space="preserve">
+    <value>槓桿倍數</value>
+  </data>
+  <data name="OrderPanel_MarginMode" xml:space="preserve">
+    <value>保證金模式</value>
+  </data>
+  <data name="OrderPanel_MarginModeHint_Default" xml:space="preserve">
+    <value>指定這筆訂單要使用的保證金模式。</value>
+  </data>
+  <data name="OrderPanel_MarginModeHint_BitMEX" xml:space="preserve">
+    <value>BitMEX 支援 Cross 與 Isolated，但若帳戶是 Multi-Asset Margin，實際上只能使用 Cross。</value>
+  </data>
+  <data name="OrderPanel_MarginModeHint_Hyperliquid" xml:space="preserve">
+    <value>Hyperliquid 支援 Cross 與 Isolated，但部分市場仍可能只允許 Isolated。</value>
+  </data>
+  <data name="OrderPanel_MarginModeHint_Aster" xml:space="preserve">
+    <value>Aster 支援 Cross 與 Isolated；若已有掛單或持倉，交易所可能拒絕切換，且 Multi-Asset Mode 僅支援 Cross。</value>
+  </data>
+  <data name="OrderPanel_MarginModeHint_GRVT" xml:space="preserve">
+    <value>GRVT 支援 Cross 與 Isolated；若已有掛單或持倉，交易所可能拒絕切換。</value>
+  </data>
+  <data name="OrderPanel_MarginModeHint_dYdX" xml:space="preserve">
+    <value>dYdX 目前在本程式預設使用 Cross。你現在設定的是 API Trading Key / API Wallet Key，dYdX 僅允許這類憑證交易 Cross，因此 Isolated 會停用顯示。</value>
+  </data>
+  <data name="OrderPanel_Leverage_Example" xml:space="preserve">
+    <value>例如 5</value>
+  </data>
+  <data name="OrderPanel_Amount" xml:space="preserve">
+    <value>合約金額</value>
+  </data>
+  <data name="OrderPanel_Amount_Example" xml:space="preserve">
+    <value>例如 1</value>
+  </data>
+  <data name="OrderPanel_LimitPrice" xml:space="preserve">
+    <value>限定價位</value>
+  </data>
+  <data name="OrderPanel_LimitPrice_Placeholder" xml:space="preserve">
+    <value>Price (Limit)</value>
+  </data>
+  <data name="OrderPanel_EstimatedCostUsd" xml:space="preserve">
+    <value>預估成本USD</value>
+  </data>
+  <data name="OrderPanel_EstimatedLiqPrice" xml:space="preserve">
+    <value>預計清算價</value>
+  </data>
+  <data name="OrderPanel_SubmitOrder" xml:space="preserve">
+    <value>送出訂單</value>
+  </data>
+  <data name="Position_EntryPrice" xml:space="preserve">
+    <value>入場價</value>
+  </data>
+  <data name="Position_MarkPrice" xml:space="preserve">
+    <value>現價</value>
+  </data>
+  <data name="Position_UnrealizedPct" xml:space="preserve">
+    <value>未實現損益%</value>
+  </data>
+  <data name="Position_UnrealizedUsd" xml:space="preserve">
+    <value>未實現損益USD</value>
+  </data>
+  <data name="Position_RealizedUsd" xml:space="preserve">
+    <value>已實現損益金額USD</value>
+  </data>
+  <data name="Position_Close" xml:space="preserve">
+    <value>平倉</value>
+  </data>
+  <data name="Position_Close_Amount_Watermark" xml:space="preserve">
+    <value>金額(USD)</value>
+  </data>
+  <data name="Position_Close_Price_Watermark" xml:space="preserve">
+    <value>價格</value>
+  </data>
+  <data name="Position_Close_Limit" xml:space="preserve">
+    <value>限價</value>
+  </data>
+  <data name="Position_Close_Limit_Hint_dYdX" xml:space="preserve">
+    <value>dYdX 的 reduce-only 平倉只支援 IOC，不會留下 Open Order；請改用市價平倉。</value>
+  </data>
+  <data name="Position_Close_Market" xml:space="preserve">
+    <value>市價</value>
+  </data>
+  <data name="Balance_Coin" xml:space="preserve">
+    <value>幣別</value>
+  </data>
+  <data name="Balance_Quantity" xml:space="preserve">
+    <value>數量</value>
+  </data>
+  <data name="OrderPanel_Cancel" xml:space="preserve">
+    <value>取消</value>
+  </data>
+  <data name="OrderPanel_OrderId" xml:space="preserve">
+    <value>訂單ID</value>
+  </data>
+  <data name="OrderPanel_OrderAction" xml:space="preserve">
+    <value>操作</value>
+  </data>
+  <data name="Empty_NoPositions" xml:space="preserve">
+    <value>目前沒有持倉資料</value>
+  </data>
+  <data name="Empty_NoPendingOrders" xml:space="preserve">
+    <value>目前沒有待處理訂單</value>
+  </data>
+  <data name="Empty_NoBalances" xml:space="preserve">
+    <value>目前沒有餘額資料</value>
+  </data>
+  <data name="AccountManager_WindowTitle" xml:space="preserve">
+    <value>帳號管理</value>
+  </data>
+  <data name="AccountManager_Title" xml:space="preserve">
+    <value>帳號管理</value>
+  </data>
+  <data name="AccountManager_ExistingAccounts" xml:space="preserve">
+    <value>已建立帳號</value>
+  </data>
+  <data name="AccountManager_Edit" xml:space="preserve">
+    <value>新增/更新帳號</value>
+  </data>
+  <data name="AccountManager_DisplayName" xml:space="preserve">
+    <value>顯示名稱</value>
+  </data>
+  <data name="AccountManager_Summary" xml:space="preserve">
+    <value>摘要（例如遮罩後的帳號、錢包或用途）</value>
+  </data>
+  <data name="AccountManager_ApiKey" xml:space="preserve">
+    <value>API Key</value>
+  </data>
+  <data name="AccountManager_ApiSecret" xml:space="preserve">
+    <value>API Secret</value>
+  </data>
+  <data name="AccountManager_AccountAddress" xml:space="preserve">
+    <value>Account Address / Public Address</value>
+  </data>
+  <data name="AccountManager_ApiWalletAddress" xml:space="preserve">
+    <value>Wallet Address（簽名用）</value>
+  </data>
+  <data name="AccountManager_ApiWalletPrivateKey" xml:space="preserve">
+    <value>Private Key（簽名用）</value>
+  </data>
+  <data name="AccountManager_AddAccount" xml:space="preserve">
+    <value>新增帳號</value>
+  </data>
+  <data name="AccountManager_UpdateCreds" xml:space="preserve">
+    <value>更新選取帳號憑證</value>
+  </data>
+  <data name="AccountManager_TestConnection" xml:space="preserve">
+    <value>測試連線</value>
+  </data>
+  <data name="AccountManager_ToggleEnabled" xml:space="preserve">
+    <value>啟用/停用</value>
+  </data>
+  <data name="AccountManager_Delete" xml:space="preserve">
+    <value>刪除</value>
+  </data>
+  <data name="AccountManager_Close" xml:space="preserve">
+    <value>關閉</value>
+  </data>
+  <data name="AccountManager_NotTested" xml:space="preserve">
+    <value>尚未測試</value>
+  </data>
+  <data name="AccountManager_CredentialsUpdated" xml:space="preserve">
+    <value>已更新憑證</value>
+  </data>
+  <data name="AccountManager_GrvtWalletRequired" xml:space="preserve">
+    <value>GRVT 使用 API Key 可讀取資料，但下單必須在帳號管理填入 WalletAddress + PrivateKey，才能產生 order.signature。</value>
+  </data>
+  <data name="AccountManager_GrvtWalletConfigured" xml:space="preserve">
+    <value>GRVT 錢包簽名憑證已設定，可產生 order.signature 進行下單。</value>
+  </data>
+  <data name="Toast_LastTabCannotClose" xml:space="preserve">
+    <value>最後一個 Tab 無法關閉</value>
+  </data>
+  <data name="Toast_AccountAdded" xml:space="preserve">
+    <value>帳號已新增</value>
+  </data>
+  <data name="Toast_CredentialsUpdated" xml:space="preserve">
+    <value>憑證已更新</value>
+  </data>
+  <data name="Toast_TestConnectionSuccess" xml:space="preserve">
+    <value>連線測試成功</value>
+  </data>
+  <data name="Toast_TestConnectionFailed" xml:space="preserve">
+    <value>連線測試失敗：</value>
+  </data>
+  <data name="Toast_TestConnectionException" xml:space="preserve">
+    <value>連線測試例外</value>
+  </data>
+  <data name="Toast_ApiSessionLockedChangeViaApi" xml:space="preserve">
+    <value>此分頁由 API 共享連線管理，請透過 API 變更。</value>
+  </data>
+  <data name="Toast_ApiSessionLocked" xml:space="preserve">
+    <value>此分頁由 API 共享連線管理。</value>
+  </data>
+  <data name="Toast_Connected" xml:space="preserve">
+    <value>已連線：</value>
+  </data>
+  <data name="Toast_ConnectTimeout" xml:space="preserve">
+    <value>連線逾時，請檢查網路或 API 設定</value>
+  </data>
+  <data name="Toast_ConnectFailed" xml:space="preserve">
+    <value>連線失敗：</value>
+  </data>
+  <data name="Toast_OrderSuccess" xml:space="preserve">
+    <value>下單成功</value>
+  </data>
+  <data name="Toast_OrderFailed" xml:space="preserve">
+    <value>下單失敗：</value>
+  </data>
+  <data name="Toast_OrderException" xml:space="preserve">
+    <value>下單例外：</value>
+  </data>
+  <data name="Toast_RefreshDataCompleted12h" xml:space="preserve">
+    <value>資料重整完成（近 12 小時）</value>
+  </data>
+  <data name="Toast_RefreshDataFailed" xml:space="preserve">
+    <value>資料重整失敗：</value>
+  </data>
+  <data name="Toast_ReloadDataFailed" xml:space="preserve">
+    <value>資料重載失敗：</value>
+  </data>
+  <data name="Toast_CloseInProgress" xml:space="preserve">
+    <value>平倉送單進行中，請稍候</value>
+  </data>
+  <data name="Toast_PositionNotFound" xml:space="preserve">
+    <value>找不到持倉資料</value>
+  </data>
+  <data name="Toast_CloseNoPrice" xml:space="preserve">
+    <value>平倉失敗：尚無可用價格</value>
+  </data>
+  <data name="Toast_ClosePriceInvalid" xml:space="preserve">
+    <value>平倉價格格式錯誤</value>
+  </data>
+  <data name="Toast_CloseQtyZero" xml:space="preserve">
+    <value>平倉失敗：部位數量為 0</value>
+  </data>
+  <data name="Toast_CloseQtyUnavailable" xml:space="preserve">
+    <value>平倉失敗：無法取得持倉數量</value>
+  </data>
+  <data name="Toast_CloseLimitSent" xml:space="preserve">
+    <value>平倉限價單已送出</value>
+  </data>
+  <data name="Toast_CloseMarketSent" xml:space="preserve">
+    <value>平倉市價單已送出</value>
+  </data>
+  <data name="Toast_CloseFailed" xml:space="preserve">
+    <value>平倉失敗：</value>
+  </data>
+  <data name="Toast_CloseException" xml:space="preserve">
+    <value>平倉例外：</value>
+  </data>
+  <data name="Toast_LocalPendingRemoved" xml:space="preserve">
+    <value>本地待同步訂單已移除</value>
+  </data>
+  <data name="Toast_OrderNoCancelableId" xml:space="preserve">
+    <value>此訂單目前無可取消識別碼</value>
+  </data>
+  <data name="Toast_CancelSuccess" xml:space="preserve">
+    <value>訂單取消成功</value>
+  </data>
+  <data name="Toast_CancelFailed" xml:space="preserve">
+    <value>取消失敗：</value>
+  </data>
+  <data name="Toast_CancelException" xml:space="preserve">
+    <value>取消例外：</value>
+  </data>
+  <data name="AccountManager_VenueCapability_Aster" xml:space="preserve">
+    <value />
+  </data>
+  <data name="AccountManager_SubAccountId" xml:space="preserve">
+    <value />
+  </data>
+  <data name="AccountManager_VenueCapability_GRVT" xml:space="preserve">
+    <value />
+  </data>
+  <data name="AccountManager_VenueCapability_BitMEX" xml:space="preserve">
+    <value />
+  </data>
+  <data name="AccountManager_TestAvailableAfterSave" xml:space="preserve">
+    <value />
+  </data>
+  <data name="AccountManager_VenueCapability_Hyperliquid" xml:space="preserve">
+    <value />
+  </data>
+  <data name="AccountManager_VenueCapability_dYdX" xml:space="preserve">
+    <value>驗證方式：僅支援 Wallet。Account Address 必須是以 dydx 開頭的 dYdX chain address，不是 0x 地址。若 Account Address 留空或誤填成 EVM 位址，程式會回退使用簽名用的 Wallet Address。Wallet Address 與 Private Key 用於簽名；Sub Account Id 可留空，預設為 0，且請填 parent subaccount number（0-127）。Cross 與 Isolated 皆可下單，但 Isolated 需要 owner wallet，不支援前端建立的 API Trading Key。</value>
+  </data>
+  <data name="Dashboard_Title" xml:space="preserve">
+    <value>Dashboard</value>
+  </data>
+  <data name="Dashboard_EnableMarketInfo" xml:space="preserve">
+    <value>啟用市場資訊</value>
+  </data>
+  <data name="Dashboard_RefreshPage" xml:space="preserve">
+    <value>刷新頁面</value>
+  </data>
+  <data name="Dashboard_OptionsTitle" xml:space="preserve">
+    <value>功能選項</value>
+  </data>
+  <data name="Dashboard_ShowTestnet" xml:space="preserve">
+    <value>顯示 testnet</value>
+  </data>
+  <data name="Dashboard_EnabledAccounts" xml:space="preserve">
+    <value>啟用帳號</value>
+  </data>
+  <data name="Dashboard_NoAccountsSelected" xml:space="preserve">
+    <value>尚未選擇帳號</value>
+  </data>
+  <data name="Dashboard_AccountsSelectedCount" xml:space="preserve">
+    <value>已選 {0} 個帳號</value>
+  </data>
+  <data name="Dashboard_SelectAll" xml:space="preserve">
+    <value>全選</value>
+  </data>
+  <data name="Dashboard_Stop" xml:space="preserve">
+    <value>停止</value>
+  </data>
+  <data name="Dashboard_Confirm" xml:space="preserve">
+    <value>確定</value>
+  </data>
+  <data name="Dashboard_SelectAtLeastOneAccount" xml:space="preserve">
+    <value>請至少選擇一個帳號。</value>
+  </data>
+  <data name="Dashboard_SelectSymbolFirst" xml:space="preserve">
+    <value>請先選擇合約。</value>
+  </data>
+  <data name="Dashboard_SelectMarketRowFirst" xml:space="preserve">
+    <value>請先選擇即時資訊列。</value>
+  </data>
+  <data name="Dashboard_OrderPreviewToast" xml:space="preserve">
+    <value>下單預覽：{0} {1} / {2} / {3} / 槓桿 {4}x / 金額 {5} / 價格 {6}</value>
+  </data>
+  <data name="Dashboard_CloseLimitToast" xml:space="preserve">
+    <value>已送出 {0} {1} 的限價平倉請求。</value>
+  </data>
+  <data name="Dashboard_CloseMarketToast" xml:space="preserve">
+    <value>已送出 {0} {1} 的市價平倉請求。</value>
+  </data>
+  <data name="Dashboard_CancelOrderToast" xml:space="preserve">
+    <value>已送出 {0} {1} 的取消訂單請求。</value>
+  </data>
+  <data name="Dashboard_DuplicateVenueWarning" xml:space="preserve">
+    <value>您已選擇同交易所的不同帳號，系統只會納入第一個選擇。</value>
+  </data>
+  <data name="Dashboard_MarketInfoRefreshing" xml:space="preserve">
+    <value>市場資訊刷新中...</value>
+  </data>
+  <data name="Dashboard_MarketInfoSuspended" xml:space="preserve">
+    <value>左區塊隱藏超過 5 秒，背景快取已暫停。</value>
+  </data>
+  <data name="Dashboard_MarketInfoError" xml:space="preserve">
+    <value>市場資訊更新失敗：{0}</value>
+  </data>
+  <data name="Dashboard_MarketInfoEnabled" xml:space="preserve">
+    <value>市場資訊快取已啟用。</value>
+  </data>
+  <data name="Dashboard_MarketInfoDisabled" xml:space="preserve">
+    <value>市場資訊快取未啟用。</value>
+  </data>
+  <data name="Dashboard_LiveInfoTitle" xml:space="preserve">
+    <value>即時資訊</value>
+  </data>
+  <data name="Dashboard_OrderTitle" xml:space="preserve">
+    <value>整合下單</value>
+  </data>
+  <data name="Dashboard_Side" xml:space="preserve">
+    <value>做多 / 做空</value>
+  </data>
+  <data name="Dashboard_Leverage" xml:space="preserve">
+    <value>槓桿</value>
+  </data>
+  <data name="Dashboard_Amount" xml:space="preserve">
+    <value>合約金額</value>
+  </data>
+  <data name="Dashboard_OrderType" xml:space="preserve">
+    <value>掛單</value>
+  </data>
+  <data name="Dashboard_TargetPrice" xml:space="preserve">
+    <value>指定價位</value>
+  </data>
+  <data name="Dashboard_Margin" xml:space="preserve">
+    <value>保證金</value>
+  </data>
+  <data name="Dashboard_LiquidPrice" xml:space="preserve">
+    <value>清算價位</value>
+  </data>
+  <data name="Dashboard_SubmitOrder" xml:space="preserve">
+    <value>確定下單</value>
+  </data>
+  <data name="Dashboard_PositionsTitle" xml:space="preserve">
+    <value>持倉管理</value>
+  </data>
+  <data name="Dashboard_OrdersTitle" xml:space="preserve">
+    <value>訂單管理</value>
+  </data>
+  <data name="Dashboard_Col_Exchange" xml:space="preserve">
+    <value>交易所</value>
+  </data>
+  <data name="Dashboard_Col_Price" xml:space="preserve">
+    <value>價位</value>
+  </data>
+  <data name="Dashboard_Col_Pnl" xml:space="preserve">
+    <value>損益</value>
+  </data>
+  <data name="Dashboard_Col_Balance" xml:space="preserve">
+    <value>帳戶餘額</value>
+  </data>
+  <data name="Dashboard_Col_Available" xml:space="preserve">
+    <value>可用餘額</value>
+  </data>
+  <data name="Dashboard_Col_Mode" xml:space="preserve">
+    <value>模式</value>
+  </data>
+  <data name="Dashboard_Col_Amount" xml:space="preserve">
+    <value>合約金額</value>
+  </data>
+  <data name="Dashboard_Col_Entry" xml:space="preserve">
+    <value>入場價</value>
+  </data>
+  <data name="Dashboard_Col_Limit" xml:space="preserve">
+    <value>目標價</value>
+  </data>
+  <data name="Dashboard_Close" xml:space="preserve">
+    <value>平倉</value>
+  </data>
+  <data name="Dashboard_Cancel" xml:space="preserve">
+    <value>取消</value>
+  </data>
+  <data name="Main_AgentSettings" xml:space="preserve">
+    <value>代理設定</value>
+  </data>
+  <data name="Main_HttpApiStatusOff" xml:space="preserve">
+    <value>HTTP API：關閉</value>
+  </data>
+  <data name="Main_HttpApiStatusInitializing" xml:space="preserve">
+    <value>HTTP API：啟動中 ({0})</value>
+  </data>
+  <data name="Main_HttpApiStatusInitializingNoPort" xml:space="preserve">
+    <value>HTTP API：啟動中</value>
+  </data>
+  <data name="Main_HttpApiStatusOn" xml:space="preserve">
+    <value>HTTP API：已啟用 ({0})</value>
+  </data>
+  <data name="Main_HttpApiStatusOnNoPort" xml:space="preserve">
+    <value>HTTP API：已啟用</value>
+  </data>
+  <data name="Main_HttpApiStatusError" xml:space="preserve">
+    <value>HTTP API：錯誤</value>
+  </data>
+  <data name="Agent_RunHistoryTitle" xml:space="preserve">
+    <value>AI Agent 執行紀錄</value>
+  </data>
+  <data name="Agent_RunNow" xml:space="preserve">
+    <value>立即執行</value>
+  </data>
+  <data name="Agent_Enable" xml:space="preserve">
+    <value>啟用 AI Agent</value>
+  </data>
+  <data name="Agent_Type" xml:space="preserve">
+    <value>AI Agent</value>
+  </data>
+  <data name="Agent_WakeInterval" xml:space="preserve">
+    <value>喚醒週期 (分鐘)</value>
+  </data>
+  <data name="Agent_WakeIntervalFormat" xml:space="preserve">
+    <value>每 {0} 分鐘</value>
+  </data>
+  <data name="Agent_LastRun" xml:space="preserve">
+    <value>最後執行</value>
+  </data>
+  <data name="Agent_NoRuns" xml:space="preserve">
+    <value>尚無紀錄</value>
+  </data>
+  <data name="Agent_Enabled" xml:space="preserve">
+    <value>已啟用</value>
+  </data>
+  <data name="Agent_Disabled" xml:space="preserve">
+    <value>未啟用</value>
+  </data>
+  <data name="Agent_Col_Time" xml:space="preserve">
+    <value>時間</value>
+  </data>
+  <data name="Agent_Col_Agent" xml:space="preserve">
+    <value>Agent</value>
+  </data>
+  <data name="Agent_Col_Command" xml:space="preserve">
+    <value>命令</value>
+  </data>
+  <data name="Agent_Col_Output" xml:space="preserve">
+    <value>輸出摘要</value>
+  </data>
+  <data name="Agent_DetailButton" xml:space="preserve">
+    <value>詳細</value>
+  </data>
+  <data name="Agent_Function" xml:space="preserve">
+    <value>功能</value>
+  </data>
+  <data name="Agent_Delete" xml:space="preserve">
+    <value>刪除</value>
+  </data>
+  <data name="Agent_ClearHistory" xml:space="preserve">
+    <value>清除紀錄</value>
+  </data>
+  <data name="Agent_ClearHistoryConfirmTitle" xml:space="preserve">
+    <value>清除 AI Agent 紀錄</value>
+  </data>
+  <data name="Agent_ClearHistoryConfirmMessage" xml:space="preserve">
+    <value>確定要清除所有 AI Agent 執行紀錄嗎？</value>
+  </data>
+  <data name="Agent_DeleteRunConfirmTitle" xml:space="preserve">
+    <value>刪除 AI Agent 紀錄</value>
+  </data>
+  <data name="Agent_DeleteRunConfirmMessage" xml:space="preserve">
+    <value>確定要刪除開始時間為 {0} 的 AI Agent 執行紀錄嗎？</value>
+  </data>
+  <data name="Agent_ClearHistorySuccess" xml:space="preserve">
+    <value>已清除 AI Agent 執行紀錄。</value>
+  </data>
+  <data name="Agent_DeleteRunSuccess" xml:space="preserve">
+    <value>已刪除 AI Agent 執行紀錄。</value>
+  </data>
+  <data name="Common_Confirm" xml:space="preserve">
+    <value>確認</value>
+  </data>
+  <data name="Common_Cancel" xml:space="preserve">
+    <value>取消</value>
+  </data>
+  <data name="Agent_CommandTemplate" xml:space="preserve">
+    <value>命令列樣板</value>
+  </data>
+  <data name="Agent_PromptTemplate" xml:space="preserve">
+    <value>Prompt 樣板</value>
+  </data>
+  <data name="Agent_WorkingDirectory" xml:space="preserve">
+    <value>工作目錄</value>
+  </data>
+  <data name="Agent_EnvironmentVariables" xml:space="preserve">
+    <value>環境變數</value>
+  </data>
+  <data name="Agent_EnvironmentVariables_Placeholder" xml:space="preserve">
+    <value>設定範例:
+OPENAI_API_KEY=your_api_key
+CODEX_HOME=C:\Users\YourName\.codex</value>
+  </data>
+  <data name="Agent_TimeoutSeconds" xml:space="preserve">
+    <value>工作逾時 (秒)</value>
+  </data>
+  <data name="Agent_Browse" xml:space="preserve">
+    <value>瀏覽</value>
+  </data>
+  <data name="Agent_McpRequired" xml:space="preserve">
+    <value>AiyoPerps MCP 必要條件</value>
+  </data>
+  <data name="Agent_McpInstallHint" xml:space="preserve">
+    <value>AI Agent 必須先安裝 AiyoPerps MCP，排程執行時才能透過 MCP 存取 app 資料。可使用 aiyoperps-mcp-bridge 與 aiyoperps-mcp-installer。</value>
+  </data>
+  <data name="Agent_CopyInstallCommand" xml:space="preserve">
+    <value>複製安裝命令</value>
+  </data>
+  <data name="Agent_OpenInstallGuide" xml:space="preserve">
+    <value>開啟安裝說明</value>
+  </data>
+  <data name="Agent_ResetTemplate" xml:space="preserve">
+    <value>重設模板</value>
+  </data>
+  <data name="Agent_TestRun" xml:space="preserve">
+    <value>測試執行</value>
+  </data>
+  <data name="Agent_Save" xml:space="preserve">
+    <value>儲存</value>
+  </data>
+  <data name="Agent_Close" xml:space="preserve">
+    <value>關閉</value>
+  </data>
+  <data name="Agent_SettingsSaved" xml:space="preserve">
+    <value>AI Agent 設定已儲存。</value>
+  </data>
+  <data name="Agent_TestRunStarted" xml:space="preserve">
+    <value>測試執行已開始。</value>
+  </data>
+  <data name="Agent_TestRunCompleted" xml:space="preserve">
+    <value>測試執行完成，狀態：{0}</value>
+  </data>
+  <data name="Agent_RunCompleted" xml:space="preserve">
+    <value>AI Agent 執行完成，狀態：{0}</value>
+  </data>
+  <data name="Agent_DetailTitle" xml:space="preserve">
+    <value>AI Agent 執行詳情</value>
+  </data>
+  <data name="Agent_Output" xml:space="preserve">
+    <value>Agent 輸出</value>
+  </data>
+  <data name="Agent_ExecutionLog" xml:space="preserve">
+    <value>執行紀錄</value>
+  </data>
+  <data name="Agent_HeaderInfo" xml:space="preserve">
+    <value>執行資訊</value>
+  </data>
+  <data name="Agent_DetailEmpty" xml:space="preserve">
+    <value>請先選擇一筆執行紀錄以檢視詳細內容。</value>
+  </data>
+  <data name="Agent_RunId" xml:space="preserve">
+    <value>Run Id</value>
+  </data>
+  <data name="Agent_StartedAt" xml:space="preserve">
+    <value>開始時間</value>
+  </data>
+  <data name="Agent_FinishedAt" xml:space="preserve">
+    <value>結束時間</value>
+  </data>
+  <data name="Agent_Duration" xml:space="preserve">
+    <value>執行時間</value>
+  </data>
+  <data name="Agent_ExitCode" xml:space="preserve">
+    <value>Exit Code</value>
+  </data>
+  <data name="Agent_RenderedCommand" xml:space="preserve">
+    <value>實際命令</value>
+  </data>
+  <data name="Agent_RenderedPrompt" xml:space="preserve">
+    <value>實際 Prompt</value>
+  </data>
+  <data name="Agent_CopyCommand" xml:space="preserve">
+    <value>複製命令</value>
+  </data>
+  <data name="Agent_CopyPrompt" xml:space="preserve">
+    <value>複製 Prompt</value>
+  </data>
+  <data name="Agent_CopyStdout" xml:space="preserve">
+    <value>複製 Stdout</value>
+  </data>
+  <data name="Agent_CopyStderr" xml:space="preserve">
+    <value>複製 Stderr</value>
+  </data>
+</root>

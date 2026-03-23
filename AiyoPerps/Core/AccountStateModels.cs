@@ -29,7 +29,9 @@ public sealed record VenueOpenOrder(
 public sealed record VenueBalance(
     string Asset,
     decimal Quantity,
-    decimal UsdValue);
+    decimal UsdValue,
+    decimal? AvailableQuantity = null,
+    decimal? AvailableUsdValue = null);
 
 public sealed record VenueAccountSnapshot(
     DateTimeOffset Timestamp,

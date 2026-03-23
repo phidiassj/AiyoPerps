@@ -1,0 +1,69 @@
+﻿<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="AiyoPerps.Views.AIAgentRunDetailWindow"
+        Width="960"
+        Height="760"
+        MinWidth="760"
+        MinHeight="560"
+        Icon="avares://AiyoPerps/Assets/logo.ico"
+        Title="{Binding L[Agent_DetailTitle]}">
+  <Grid RowDefinitions="Auto,*,Auto" Margin="16" RowSpacing="12">
+    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="8">
+      <TextBlock Text="{Binding L[Agent_RunId]}" Classes="label" />
+      <TextBlock Grid.Column="1" Text="{Binding Record.RunId}" />
+
+      <TextBlock Grid.Row="1" Text="{Binding L[Agent_StartedAt]}" Classes="label" />
+      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding StartedAtDisplay}" />
+
+      <TextBlock Grid.Row="2" Text="{Binding L[Agent_FinishedAt]}" Classes="label" />
+      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding FinishedAtDisplay}" />
+
+      <TextBlock Grid.Row="3" Text="{Binding L[Agent_Duration]}" Classes="label" />
+      <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding DurationDisplay}" />
+
+      <TextBlock Grid.Row="4" Text="{Binding L[Agent_Type]}" Classes="label" />
+      <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding AgentDisplayName}" />
+
+      <TextBlock Grid.Row="5" Text="{Binding L[Main_Status]}" Classes="label" />
+      <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding Record.Status}" />
+
+      <TextBlock Grid.Row="6" Text="{Binding L[Agent_ExitCode]}" Classes="label" />
+      <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding Record.ExitCode}" />
+    </Grid>
+
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,20,0">
+      <StackPanel Spacing="12">
+        <TextBlock Text="{Binding L[Agent_WorkingDirectory]}" FontWeight="Bold" Foreground="#E2F7FB" />
+        <TextBox Text="{Binding Record.WorkingDirectory}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" />
+
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+          <TextBlock Text="{Binding L[Agent_RenderedCommand]}" FontWeight="Bold" Foreground="#E2F7FB" />
+          <Button Grid.Column="1" Content="{Binding L[Agent_CopyCommand]}" Click="OnCopyCommandClick" />
+        </Grid>
+        <TextBox Text="{Binding Record.RenderedCommand}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" FontFamily="Consolas" />
+
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+          <TextBlock Text="{Binding L[Agent_RenderedPrompt]}" FontWeight="Bold" Foreground="#E2F7FB" />
+          <Button Grid.Column="1" Content="{Binding L[Agent_CopyPrompt]}" Click="OnCopyPromptClick" />
+        </Grid>
+        <TextBox Text="{Binding Record.RenderedPrompt}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" Height="160" FontFamily="Consolas" />
+
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+          <TextBlock Text="Stdout" FontWeight="Bold" Foreground="#E2F7FB" />
+          <Button Grid.Column="1" Content="{Binding L[Agent_CopyStdout]}" Click="OnCopyStdoutClick" />
+        </Grid>
+        <TextBox Text="{Binding Record.Stdout}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" Height="160" FontFamily="Consolas" />
+
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+          <TextBlock Text="Stderr" FontWeight="Bold" Foreground="#E2F7FB" />
+          <Button Grid.Column="1" Content="{Binding L[Agent_CopyStderr]}" Click="OnCopyStderrClick" />
+        </Grid>
+        <TextBox Text="{Binding Record.Stderr}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" Height="160" FontFamily="Consolas" />
+      </StackPanel>
+    </ScrollViewer>
+
+    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button Content="{Binding L[Agent_Close]}" Click="OnCloseClick" />
+    </StackPanel>
+  </Grid>
+</Window>

@@ -16,7 +16,7 @@ using System.Windows.Input;
 
 namespace AiyoPerps.ViewModels;
 
-public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
+public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable, IMainTabViewModel
 {
     private readonly ViewportService _viewportService = new(new OrderBookAutoHidePolicy());
     private readonly AccountStore _accountStore;
@@ -228,6 +228,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
 
     public Guid TabId { get; }
     public string Header { get; private set; }
+    public bool IsClosable => true;
     public WorkspaceBinding? Binding { get; private set; }
     public ObservableCollection<AccountProfile> AvailableAccounts { get; }
     public ObservableCollection<SymbolOptionItem> SymbolOptions { get; }
@@ -322,14 +323,14 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
                 if (!string.Equals(_selectedSymbolOption?.Value, normalized, StringComparison.Ordinal))
                 {
                     _selectedSymbolOption = SymbolOptions.FirstOrDefault(x => string.Equals(x.Value, normalized, StringComparison.OrdinalIgnoreCase))
-                        ?? new SymbolOptionItem(normalized, SymbolDisplayText.Format(normalized));
+                        ?? new SymbolOptionItem(normalized, ResolveSymbolDisplayText(normalized));
                     RaisePropertyChanged(nameof(SelectedSymbolOption));
                 }
 
                 if (Binding is not null)
                 {
                     Binding = Binding with { Symbol = normalized };
-                    Header = $"{Binding.VenueId}:{SymbolDisplayText.Format(normalized)}";
+                    Header = $"{Binding.VenueId}:{SymbolDisplayText.Format(Binding.VenueId, normalized)}";
                     RaisePropertyChanged(nameof(Header));
                 }
 
@@ -843,7 +844,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             SelectedAccount = account;
             _symbol = connection.Symbol;
             _selectedSymbolOption = SymbolOptions.FirstOrDefault(x => string.Equals(x.Value, connection.Symbol, StringComparison.OrdinalIgnoreCase))
-                ?? new SymbolOptionItem(connection.Symbol, SymbolDisplayText.Format(connection.Symbol));
+                ?? new SymbolOptionItem(connection.Symbol, SymbolDisplayText.Format(account.VenueId, connection.Symbol));
             _selectedInterval = string.IsNullOrWhiteSpace(connection.Interval) ? "5m" : connection.Interval;
             RaisePropertyChanged(nameof(Symbol));
             RaisePropertyChanged(nameof(SelectedSymbolOption));
@@ -856,7 +857,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         }
 
         Binding = new WorkspaceBinding(account.VenueId, account.AccountId, connection.Symbol);
-        Header = $"{account.VenueId}:{SymbolDisplayText.Format(connection.Symbol)}";
+        Header = $"{account.VenueId}:{SymbolDisplayText.Format(account.VenueId, connection.Symbol)}";
         RaisePropertyChanged(nameof(Header));
         IsConfigured = true;
         RaisePropertyChanged(nameof(CanEditMarketSessionSettings));
@@ -924,6 +925,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         RaisePropertyChanged(nameof(CanUseRestingLimitClose));
         RaisePropertyChanged(nameof(IsRestingLimitCloseUnavailable));
         RaisePropertyChanged(nameof(CloseLimitSupportText));
+        NotifyPanelRowsContextChanged();
     }
 
     private static string CoerceMarginModeSelection(string? raw, IReadOnlyList<string> options, string? venueId)
@@ -1001,6 +1003,20 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         RefreshLocalizedOrderOptions();
         RaisePropertyChanged(nameof(MarginModeSupportText));
         RaisePropertyChanged(nameof(CloseLimitSupportText));
+        NotifyPanelRowsContextChanged();
+    }
+
+    private void NotifyPanelRowsContextChanged()
+    {
+        foreach (var row in _activePositions)
+        {
+            row.NotifyParentContextChanged();
+        }
+
+        foreach (var row in _pendingOrders)
+        {
+            row.NotifyParentContextChanged();
+        }
     }
 
     private void NotifySharedSessionLocked()
@@ -1074,19 +1090,28 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
                 return;
             }
 
-            var symbols = _symbolCatalogRepository.GetActiveSymbols(account.VenueId, account.Environment).ToList();
-            if (symbols.Count == 0)
+            var entries = _symbolCatalogRepository.GetActiveSymbolEntries(account.VenueId, account.Environment).ToList();
+            var symbols = entries.Select(x => x.RawSymbol).ToList();
+            if (entries.Count == 0)
             {
                 var fallback = ResolvePreferredSymbol(account, currentSymbol, symbols);
                 if (!string.IsNullOrWhiteSpace(fallback))
                 {
+                    entries.Add(new SymbolCatalogEntry(
+                        fallback,
+                        $"RAW:{fallback}",
+                        SymbolDisplayText.Format(account.VenueId, fallback),
+                        null,
+                        null,
+                        null,
+                        null));
                     symbols.Add(fallback);
                 }
             }
 
-            foreach (var sym in symbols)
+            foreach (var entry in entries)
             {
-                SymbolOptions.Add(new SymbolOptionItem(sym, SymbolDisplayText.Format(sym)));
+                SymbolOptions.Add(new SymbolOptionItem(entry.RawSymbol, entry.DisplaySymbol));
             }
 
             var preferred = ResolvePreferredSymbol(account, currentSymbol, symbols);
@@ -1100,7 +1125,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
 
             var selected = SymbolOptions.FirstOrDefault(x => string.Equals(x.Value, Symbol, StringComparison.OrdinalIgnoreCase))
                 ?? SymbolOptions.FirstOrDefault(x => string.Equals(x.Value, preferred, StringComparison.OrdinalIgnoreCase))
-                ?? (string.IsNullOrWhiteSpace(preferred) ? null : new SymbolOptionItem(preferred, SymbolDisplayText.Format(preferred)));
+                ?? (string.IsNullOrWhiteSpace(preferred) ? null : new SymbolOptionItem(preferred, SymbolDisplayText.Format(account.VenueId, preferred)));
             _selectedSymbolOption = selected;
             RaisePropertyChanged(nameof(SelectedSymbolOption));
             RaisePropertyChanged(nameof(Symbol));
@@ -1152,6 +1177,12 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
         return symbols.FirstOrDefault() ?? currentSymbol;
     }
 
+    private string ResolveSymbolDisplayText(string symbol)
+    {
+        var venueId = SelectedAccount?.VenueId ?? Binding?.VenueId;
+        return SymbolDisplayText.Format(venueId, symbol);
+    }
+
     private async Task ConfirmActivationAsync()
     {
         if (_isApiSessionManaged)
@@ -1170,7 +1201,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             _logger.Info("WorkspaceTab", $"Activation start tabId={TabId}, account={SelectedAccount.DisplayName}, venue={SelectedAccount.VenueId}, symbol={Symbol}");
 
             Binding = new WorkspaceBinding(SelectedAccount.VenueId, SelectedAccount.AccountId, Symbol);
-            Header = $"{SelectedAccount.VenueId}:{SymbolDisplayText.Format(Symbol)}";
+            Header = $"{SelectedAccount.VenueId}:{SymbolDisplayText.Format(SelectedAccount.VenueId, Symbol)}";
             RaisePropertyChanged(nameof(Header));
 
             IsConfigured = true;
@@ -1191,7 +1222,7 @@ public sealed partial class WorkspaceTabViewModel : ViewModelBase, IDisposable
             _symbolCatalogRepository.MarkActivated(SelectedAccount.VenueId, SelectedAccount.Environment, Symbol);
             LoadSymbolOptions(SelectedAccount, autoSelectSymbol: false);
             ConnectionStatus = $"Connected ({_venue.VenueId})";
-            _toastService.ShowInfo($"{L["Toast_Connected"]}{_venue.VenueId} {SymbolDisplayText.Format(Symbol)}");
+            _toastService.ShowInfo($"{L["Toast_Connected"]}{_venue.VenueId} {SymbolDisplayText.Format(SelectedAccount.VenueId, Symbol)}");
             _marketStreamSymbol = Symbol;
             StartMarketPump();
             StartAccountStatePump();
@@ -2593,6 +2624,8 @@ public sealed record RecentTradeRow(DateTimeOffset TradeTime, decimal Price, dec
 
 public sealed class PositionPanelRow : ViewModelBase
 {
+    private readonly WorkspaceTabViewModel _owner;
+    private readonly string _displaySymbol;
     private string _contractAmount = string.Empty;
     private string _leverage = string.Empty;
     private string _marginMode = "-";
@@ -2603,14 +2636,33 @@ public sealed class PositionPanelRow : ViewModelBase
     private decimal _realizedPnlUsd;
     private string _closePrice;
 
-    public PositionPanelRow(string symbol, string closePrice)
+    public PositionPanelRow(WorkspaceTabViewModel owner, string symbol, string displaySymbol, string closePrice)
     {
+        _owner = owner;
         Symbol = symbol;
+        _displaySymbol = displaySymbol;
         _closePrice = closePrice;
     }
 
     public string Symbol { get; }
-    public string DisplaySymbol => SymbolDisplayText.Format(Symbol);
+    public string DisplaySymbol => _displaySymbol;
+    public string AmountLabel => _owner.L["OrderPanel_Amount"];
+    public string LeverageLabel => _owner.L["OrderPanel_Leverage"];
+    public string MarginModeLabel => _owner.L["OrderPanel_MarginMode"];
+    public string EntryPriceLabel => _owner.L["Position_EntryPrice"];
+    public string MarkPriceLabel => _owner.L["Position_MarkPrice"];
+    public string UnrealizedPctLabel => _owner.L["Position_UnrealizedPct"];
+    public string UnrealizedUsdLabel => _owner.L["Position_UnrealizedUsd"];
+    public string RealizedUsdLabel => _owner.L["Position_RealizedUsd"];
+    public string CloseLabel => _owner.L["Position_Close"];
+    public string ClosePriceWatermark => _owner.L["Position_Close_Price_Watermark"];
+    public string CloseLimitLabel => _owner.L["Position_Close_Limit"];
+    public string CloseMarketLabel => _owner.L["Position_Close_Market"];
+    public bool CanUseRestingLimitClose => _owner.CanUseRestingLimitClose;
+    public bool IsRestingLimitCloseUnavailable => _owner.IsRestingLimitCloseUnavailable;
+    public string CloseLimitSupportText => _owner.CloseLimitSupportText;
+    public ICommand ClosePositionLimitCommand => _owner.ClosePositionLimitCommand;
+    public ICommand ClosePositionMarketCommand => _owner.ClosePositionMarketCommand;
     public string ContractAmount
     {
         get => _contractAmount;
@@ -2726,21 +2778,87 @@ public sealed class PositionPanelRow : ViewModelBase
         UnrealizedPnlUsd = unrealizedPnlUsd;
         RealizedPnlUsd = realizedPnlUsd;
     }
+
+    public void NotifyParentContextChanged()
+    {
+        RaisePropertyChanged(nameof(AmountLabel));
+        RaisePropertyChanged(nameof(LeverageLabel));
+        RaisePropertyChanged(nameof(MarginModeLabel));
+        RaisePropertyChanged(nameof(EntryPriceLabel));
+        RaisePropertyChanged(nameof(MarkPriceLabel));
+        RaisePropertyChanged(nameof(UnrealizedPctLabel));
+        RaisePropertyChanged(nameof(UnrealizedUsdLabel));
+        RaisePropertyChanged(nameof(RealizedUsdLabel));
+        RaisePropertyChanged(nameof(CloseLabel));
+        RaisePropertyChanged(nameof(ClosePriceWatermark));
+        RaisePropertyChanged(nameof(CloseLimitLabel));
+        RaisePropertyChanged(nameof(CloseMarketLabel));
+        RaisePropertyChanged(nameof(CanUseRestingLimitClose));
+        RaisePropertyChanged(nameof(IsRestingLimitCloseUnavailable));
+        RaisePropertyChanged(nameof(CloseLimitSupportText));
+    }
 }
 
-public sealed record PendingOrderPanelRow(
-    string Symbol,
-    string ContractAmount,
-    string Leverage,
-    string MarginMode,
-    string LimitPrice,
-    string Status,
-    string? VenueOrderId,
-    string? LocalOrderId,
-    bool IsExchangeOrder)
+public sealed class PendingOrderPanelRow : ViewModelBase
 {
-    public string DisplaySymbol => SymbolDisplayText.Format(Symbol);
+    private readonly WorkspaceTabViewModel _owner;
+
+    public PendingOrderPanelRow(
+        WorkspaceTabViewModel owner,
+        string symbol,
+        string displaySymbol,
+        string contractAmount,
+        string leverage,
+        string marginMode,
+        string limitPrice,
+        string status,
+        string? venueOrderId,
+        string? localOrderId,
+        bool isExchangeOrder)
+    {
+        _owner = owner;
+        Symbol = symbol;
+        DisplaySymbol = displaySymbol;
+        ContractAmount = contractAmount;
+        Leverage = leverage;
+        MarginMode = marginMode;
+        LimitPrice = limitPrice;
+        Status = status;
+        VenueOrderId = venueOrderId;
+        LocalOrderId = localOrderId;
+        IsExchangeOrder = isExchangeOrder;
+    }
+
+    public string Symbol { get; }
+    public string DisplaySymbol { get; }
+    public string ContractAmount { get; }
+    public string Leverage { get; }
+    public string MarginMode { get; }
+    public string LimitPrice { get; }
+    public string Status { get; }
+    public string? VenueOrderId { get; }
+    public string? LocalOrderId { get; }
+    public bool IsExchangeOrder { get; }
+    public string AmountLabel => _owner.L["OrderPanel_Amount"];
+    public string LeverageLabel => _owner.L["OrderPanel_Leverage"];
+    public string MarginModeLabel => _owner.L["OrderPanel_MarginMode"];
+    public string LimitPriceLabel => _owner.L["OrderPanel_LimitPrice"];
+    public string StatusLabel => _owner.L["Main_Status"];
+    public string OrderIdLabel => _owner.L["OrderPanel_OrderId"];
+    public string CancelLabel => _owner.L["OrderPanel_Cancel"];
+    public ICommand CancelPendingOrderCommand => _owner.CancelPendingOrderCommand;
     public string VenueOrderIdDisplay => string.IsNullOrWhiteSpace(VenueOrderId) ? "-" : VenueOrderId!;
+
+    public void NotifyParentContextChanged()
+    {
+        RaisePropertyChanged(nameof(AmountLabel));
+        RaisePropertyChanged(nameof(LeverageLabel));
+        RaisePropertyChanged(nameof(MarginModeLabel));
+        RaisePropertyChanged(nameof(LimitPriceLabel));
+        RaisePropertyChanged(nameof(StatusLabel));
+        RaisePropertyChanged(nameof(OrderIdLabel));
+        RaisePropertyChanged(nameof(CancelLabel));
+    }
 }
 
 public sealed record BalancePanelRow(string Coin, decimal Quantity, decimal UsdValue)
@@ -2757,24 +2875,10 @@ public sealed record SymbolOptionItem(string Value, string Display)
 public static class SymbolDisplayText
 {
     public static string Format(string symbol)
-    {
-        var normalized = (symbol ?? string.Empty).Trim().ToUpperInvariant();
+        => SymbolCanonicalizer.Format(symbol);
 
-        var parts = normalized.Split('_', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length == 3 && string.Equals(parts[2], "PERP", StringComparison.Ordinal))
-        {
-            var baseAsset = parts[0];
-            var quoteAsset = parts[1];
-            if (quoteAsset is "USDT" or "USDC")
-            {
-                return baseAsset + "USDT";
-            }
-
-            return baseAsset + quoteAsset;
-        }
-
-        return normalized;
-    }
+    public static string Format(string? venueId, string symbol)
+        => SymbolCanonicalizer.Format(venueId, symbol);
 }
 
 internal sealed record PositionState(

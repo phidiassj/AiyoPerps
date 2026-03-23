@@ -4,6 +4,7 @@ using Avalonia.Threading;
 using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -22,7 +23,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
     private readonly UserPreferenceRepository _userPreferenceRepository;
     private readonly LocalApiServer _localApiServer;
     private readonly TradingApiService _tradingApiService;
-    private WorkspaceTabViewModel? _selectedTab;
+    private readonly AIAgentExecutionService _aiAgentExecutionService;
+    private readonly HttpApiStateService _httpApiStateService;
+    private readonly DashboardTabViewModel _dashboardTab;
+    private IMainTabViewModel? _selectedTab;
     private LanguageOption? _selectedLanguage;
     private bool _suppressLanguageSave;
     private bool _suppressHttpApiToggle;
@@ -31,7 +35,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
     private string _httpApiStatus = "HTTP API: OFF";
     private int _disposeStarted;
 
-    public MainWindowViewModel(AccountStore accountStore, IVenueFactory venueFactory, CandleRepository candleRepository, SymbolCatalogRepository symbolCatalogRepository, AppLogger logger, ToastService toastService, UserPreferenceRepository userPreferenceRepository, LocalApiServer localApiServer, TradingApiService tradingApiService)
+    public MainWindowViewModel(AccountStore accountStore, IVenueFactory venueFactory, CandleRepository candleRepository, SymbolCatalogRepository symbolCatalogRepository, AppLogger logger, ToastService toastService, UserPreferenceRepository userPreferenceRepository, LocalApiServer localApiServer, TradingApiService tradingApiService, DashboardService dashboardService, AIAgentExecutionService aiAgentExecutionService, HttpApiStateService httpApiStateService)
     {
         _accountStore = accountStore;
         _venueFactory = venueFactory;
@@ -42,6 +46,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
         _userPreferenceRepository = userPreferenceRepository;
         _localApiServer = localApiServer;
         _tradingApiService = tradingApiService;
+        _aiAgentExecutionService = aiAgentExecutionService;
+        _httpApiStateService = httpApiStateService;
+        _dashboardTab = new DashboardTabViewModel(_accountStore.Accounts, _symbolCatalogRepository, _toastService, dashboardService, _aiAgentExecutionService);
 
         AddTabCommand = new RelayCommand(_ => AddTab());
         CloseTabCommand = new RelayCommand(
@@ -63,6 +70,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
         _suppressHttpApiToggle = true;
         IsHttpApiEnabled = _userPreferenceRepository.GetHttpApiEnabledOrDefault(false);
         _suppressHttpApiToggle = false;
+        _httpApiStateService.StateChanged += OnHttpApiStateChanged;
+        RefreshHttpApiStatus();
 
         if (IsHttpApiEnabled)
         {
@@ -71,12 +80,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
 
         _tradingApiService.ConnectionOpened += OnApiConnectionOpened;
         _tradingApiService.ConnectionClosed += OnApiConnectionClosed;
-        AddTab();
+        Tabs.Add(_dashboardTab);
+        SelectedTab = _dashboardTab;
     }
 
-    public ObservableCollection<WorkspaceTabViewModel> Tabs { get; } = [];
+    public ObservableCollection<IMainTabViewModel> Tabs { get; } = [];
 
-    public WorkspaceTabViewModel? SelectedTab
+    public IMainTabViewModel? SelectedTab
     {
         get => _selectedTab;
         set
@@ -89,8 +99,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
             var previous = _selectedTab;
             if (SetProperty(ref _selectedTab, value))
             {
-                previous?.SetActiveState(false);
-                value?.SetActiveState(true);
+                if (previous is WorkspaceTabViewModel previousWorkspace)
+                {
+                    previousWorkspace.SetActiveState(false);
+                }
+
+                if (value is WorkspaceTabViewModel workspaceTab)
+                {
+                    workspaceTab.SetActiveState(true);
+                }
             }
         }
     }
@@ -188,14 +205,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
         _ = tab.DisposeAsync();
         Tabs.Remove(tab);
 
-        if (SelectedTab == tab)
+        if (ReferenceEquals(SelectedTab, tab))
         {
             SelectedTab = Tabs.LastOrDefault();
-        }
-
-        if (Tabs.Count == 0)
-        {
-            AddTab();
         }
     }
 
@@ -214,6 +226,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
         L.PropertyChanged -= OnLocalizationChanged;
         _tradingApiService.ConnectionOpened -= OnApiConnectionOpened;
         _tradingApiService.ConnectionClosed -= OnApiConnectionClosed;
+        _httpApiStateService.StateChanged -= OnHttpApiStateChanged;
 
         var tabs = Tabs.ToList();
         Tabs.Clear();
@@ -223,11 +236,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
         {
             try
             {
-                await tab.DisposeAsync();
+                if (tab is IAsyncDisposable asyncDisposable)
+                {
+                    await asyncDisposable.DisposeAsync();
+                }
+                else if (tab is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
             }
             catch (Exception ex)
             {
-                _logger.Warn("MainWindow", $"Tab dispose warning tabId={tab.TabId}: {ex.Message}");
+                _logger.Warn("MainWindow", $"Tab dispose warning header={tab.Header}: {ex.Message}");
             }
         }
     }
@@ -241,7 +261,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
     {
         Dispatcher.UIThread.Post(() =>
         {
-            var tabs = Tabs.Where(x => x.MatchesBinding(accountId, symbol)).ToList();
+            var tabs = Tabs.OfType<WorkspaceTabViewModel>().Where(x => x.MatchesBinding(accountId, symbol)).ToList();
             if (tabs.Count == 0)
             {
                 return;
@@ -256,7 +276,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
 
     private async Task EnsureTabForApiConnectionAsync(ApiConnectionDto dto)
     {
-        var existing = Tabs.FirstOrDefault(x => x.MatchesBinding(dto.AccountId, dto.Symbol));
+        var existing = Tabs.OfType<WorkspaceTabViewModel>().FirstOrDefault(x => x.MatchesBinding(dto.AccountId, dto.Symbol));
         if (existing is not null)
         {
             await existing.AttachApiSessionAsync(dto);
@@ -281,24 +301,27 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
                 IsHttpApiEnabled = false;
                 _suppressHttpApiToggle = false;
                 RaisePropertyChanged(nameof(CanEditHttpApiPort));
+                _httpApiStateService.MarkOff(null);
+                RefreshHttpApiStatus();
                 return;
             }
 
             try
             {
+                _httpApiStateService.MarkInitializing(port);
                 await _localApiServer.StartAsync(port);
-                HttpApiStatus = $"HTTP API: ON ({port})";
+                _httpApiStateService.MarkReady(port);
                 _userPreferenceRepository.SaveHttpApiPort(port);
                 _userPreferenceRepository.SaveHttpApiEnabled(true);
                 _logger.Info("MainWindow", $"HTTP API enabled port={port}");
             }
             catch (Exception ex)
             {
+                _httpApiStateService.MarkError(port);
                 _suppressHttpApiToggle = true;
                 IsHttpApiEnabled = false;
                 _suppressHttpApiToggle = false;
                 RaisePropertyChanged(nameof(CanEditHttpApiPort));
-                HttpApiStatus = "HTTP API: ERROR";
                 _userPreferenceRepository.SaveHttpApiEnabled(false);
                 _toastService.ShowError($"HTTP API start failed: {ex.Message}");
                 _logger.Error("MainWindow", "HTTP API start failed", ex);
@@ -310,13 +333,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
         try
         {
             await _localApiServer.StopAsync();
-            HttpApiStatus = "HTTP API: OFF";
+            _httpApiStateService.MarkOff(int.TryParse(HttpApiPort, out var port) ? port : null);
             _userPreferenceRepository.SaveHttpApiEnabled(false);
             _logger.Info("MainWindow", "HTTP API disabled");
         }
         catch (Exception ex)
         {
-            HttpApiStatus = "HTTP API: ERROR";
+            _httpApiStateService.MarkError(int.TryParse(HttpApiPort, out var port) ? port : null);
             _toastService.ShowError($"HTTP API stop failed: {ex.Message}");
             _logger.Error("MainWindow", "HTTP API stop failed", ex);
         }
@@ -332,10 +355,34 @@ public sealed class MainWindowViewModel : ViewModelBase, IDisposable, IAsyncDisp
         }
 
         NotifyLocalizationChanged();
+        RefreshHttpApiStatus();
         foreach (var tab in Tabs)
         {
             tab.NotifyLocalizationChanged();
         }
+    }
+
+    private void OnHttpApiStateChanged()
+    {
+        Dispatcher.UIThread.Post(RefreshHttpApiStatus);
+    }
+
+    private void RefreshHttpApiStatus()
+    {
+        var port = _httpApiStateService.Port
+            ?? (int.TryParse(HttpApiPort, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedPort) ? parsedPort : (int?)null);
+
+        HttpApiStatus = _httpApiStateService.State switch
+        {
+            HttpApiState.Initializing => port.HasValue
+                ? string.Format(CultureInfo.CurrentCulture, L["Main_HttpApiStatusInitializing"], port.Value)
+                : L["Main_HttpApiStatusInitializingNoPort"],
+            HttpApiState.Ready => port.HasValue
+                ? string.Format(CultureInfo.CurrentCulture, L["Main_HttpApiStatusOn"], port.Value)
+                : L["Main_HttpApiStatusOnNoPort"],
+            HttpApiState.Error => L["Main_HttpApiStatusError"],
+            _ => L["Main_HttpApiStatusOff"]
+        };
     }
 }
 

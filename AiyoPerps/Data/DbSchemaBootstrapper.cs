@@ -93,6 +93,23 @@ public static class DbSchemaBootstrapper
             """);
 
         db.Database.ExecuteSqlRaw(
+            """
+            CREATE TABLE IF NOT EXISTS AIAgentRuns (
+              RunId TEXT NOT NULL PRIMARY KEY,
+              StartedAt TEXT NOT NULL,
+              FinishedAt TEXT NULL,
+              AgentType TEXT NOT NULL,
+              Status TEXT NOT NULL,
+              ExitCode INTEGER NULL,
+              WorkingDirectory TEXT NOT NULL,
+              RenderedCommand TEXT NOT NULL,
+              RenderedPrompt TEXT NOT NULL,
+              Stdout TEXT NOT NULL,
+              Stderr TEXT NOT NULL
+            );
+            """);
+
+        db.Database.ExecuteSqlRaw(
             "CREATE UNIQUE INDEX IF NOT EXISTS IX_Accounts_VenueId_DisplayName ON Accounts (VenueId, DisplayName);");
         db.Database.ExecuteSqlRaw(
             "CREATE UNIQUE INDEX IF NOT EXISTS IX_Candles_VenueId_Symbol_Interval_OpenTime ON Candles (VenueId, Symbol, Interval, OpenTime);");
@@ -104,6 +121,8 @@ public static class DbSchemaBootstrapper
             "CREATE INDEX IF NOT EXISTS IX_Logs_Timestamp_Level ON Logs (Timestamp, Level);");
         db.Database.ExecuteSqlRaw(
             "CREATE UNIQUE INDEX IF NOT EXISTS IX_UserPreferences_PreferenceKey ON UserPreferences (PreferenceKey);");
+        db.Database.ExecuteSqlRaw(
+            "CREATE INDEX IF NOT EXISTS IX_AIAgentRuns_StartedAt ON AIAgentRuns (StartedAt);");
 
         EnsureAccountsColumn(db.Database.GetDbConnection(), "AccountAddress", "TEXT NULL");
         EnsureAccountsColumn(db.Database.GetDbConnection(), "SubAccountId", "TEXT NULL");
@@ -111,6 +130,12 @@ public static class DbSchemaBootstrapper
         EnsureAccountsColumn(db.Database.GetDbConnection(), "WalletAddress", "TEXT NULL");
         EnsureAccountsColumn(db.Database.GetDbConnection(), "PrivateKeyEncrypted", "TEXT NULL");
         EnsureSymbolsColumn(db.Database.GetDbConnection(), "LastActivatedAt", "TEXT NULL");
+        EnsureSymbolsColumn(db.Database.GetDbConnection(), "CanonicalKey", "TEXT NULL");
+        EnsureSymbolsColumn(db.Database.GetDbConnection(), "BaseAsset", "TEXT NULL");
+        EnsureSymbolsColumn(db.Database.GetDbConnection(), "QuoteAsset", "TEXT NULL");
+        EnsureSymbolsColumn(db.Database.GetDbConnection(), "SettleAsset", "TEXT NULL");
+        EnsureSymbolsColumn(db.Database.GetDbConnection(), "ContractType", "TEXT NULL");
+        EnsureSymbolsColumn(db.Database.GetDbConnection(), "DisplaySymbol", "TEXT NULL");
     }
 
     private static void EnsureAccountsColumn(DbConnection conn, string columnName, string sqliteType)

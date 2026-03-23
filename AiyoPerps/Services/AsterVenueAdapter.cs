@@ -810,14 +810,28 @@ public sealed class AsterVenueAdapter : IPerpVenue, IHistoricalCandleProvider, I
             }
 
             var qty = ParseDecimal(item, "balance");
+            var availableQty = ParseDecimal(item, "availableBalance");
+            if (availableQty <= 0m)
+            {
+                availableQty = ParseDecimal(item, "withdrawAvailable");
+            }
+
             var crossWallet = ParseDecimal(item, "crossWalletBalance");
             var usd = asset is "USDT" or "USDC" or "USD" ? qty : Math.Max(0m, crossWallet);
-            if (qty == 0m && usd == 0m)
+            var availableUsd = asset is "USDT" or "USDC" or "USD"
+                ? (availableQty > 0m ? availableQty : qty)
+                : Math.Max(0m, crossWallet);
+            if (qty <= 0m)
             {
                 continue;
             }
 
-            rows.Add(new VenueBalance(asset, qty, usd));
+            rows.Add(new VenueBalance(
+                asset,
+                qty,
+                usd,
+                availableQty > 0m ? availableQty : qty,
+                availableUsd));
         }
 
         return rows;
@@ -894,10 +908,22 @@ public sealed class AsterVenueAdapter : IPerpVenue, IHistoricalCandleProvider, I
                 qty = ParseDecimal(item, "availableBalance");
             }
 
+            var availableQty = ParseDecimal(item, "availableBalance");
+            if (availableQty <= 0m)
+            {
+                availableQty = ParseDecimal(item, "withdrawAvailable");
+            }
+            if (availableQty <= 0m)
+            {
+                availableQty = qty;
+            }
+
             decimal usd;
+            decimal availableUsd;
             if (asset is "USDT" or "USDC" or "USD")
             {
                 usd = qty;
+                availableUsd = availableQty;
             }
             else
             {
@@ -906,14 +932,21 @@ public sealed class AsterVenueAdapter : IPerpVenue, IHistoricalCandleProvider, I
                 {
                     usd = ParseDecimal(item, "crossWalletBalance");
                 }
+
+                availableUsd = usd;
             }
 
-            if (qty == 0m && usd == 0m)
+            if (qty <= 0m)
             {
                 continue;
             }
 
-            rows.Add(new VenueBalance(asset, qty, Math.Max(0m, usd)));
+            rows.Add(new VenueBalance(
+                asset,
+                qty,
+                Math.Max(0m, usd),
+                availableQty,
+                Math.Max(0m, availableUsd)));
         }
 
         return rows;

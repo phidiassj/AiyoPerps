@@ -15,6 +15,7 @@ public sealed class AppDbContext : DbContext
     public DbSet<WorkspaceLayoutEntity> WorkspaceLayouts => Set<WorkspaceLayoutEntity>();
     public DbSet<LogEntryEntity> Logs => Set<LogEntryEntity>();
     public DbSet<UserPreferenceEntity> UserPreferences => Set<UserPreferenceEntity>();
+    public DbSet<AIAgentRunEntity> AIAgentRuns => Set<AIAgentRunEntity>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -46,5 +47,11 @@ public sealed class AppDbContext : DbContext
         modelBuilder.Entity<UserPreferenceEntity>()
             .HasIndex(x => x.PreferenceKey)
             .IsUnique();
+
+        modelBuilder.Entity<AIAgentRunEntity>()
+            .HasKey(x => x.RunId);
+
+        modelBuilder.Entity<AIAgentRunEntity>()
+            .HasIndex(x => x.StartedAt);
     }
 }

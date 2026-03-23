@@ -17,6 +17,24 @@ public sealed class SymbolCatalogEntity
     [MaxLength(64)]
     public required string Symbol { get; set; }
 
+    [MaxLength(128)]
+    public string? CanonicalKey { get; set; }
+
+    [MaxLength(32)]
+    public string? BaseAsset { get; set; }
+
+    [MaxLength(32)]
+    public string? QuoteAsset { get; set; }
+
+    [MaxLength(32)]
+    public string? SettleAsset { get; set; }
+
+    [MaxLength(32)]
+    public string? ContractType { get; set; }
+
+    [MaxLength(96)]
+    public string? DisplaySymbol { get; set; }
+
     public bool IsActive { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset? LastActivatedAt { get; set; }

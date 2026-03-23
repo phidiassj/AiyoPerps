@@ -1,0 +1,851 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <!-- 
+    Microsoft ResX Schema 
+    
+    Version 2.0
+    
+    The primary goals of this format is to allow a simple XML format 
+    that is mostly human readable. The generation and parsing of the 
+    various data types are done through the TypeConverter classes 
+    associated with the data types.
+    
+    Example:
+    
+    ... ado.net/XML headers & schema ...
+    <resheader name="resmimetype">text/microsoft-resx</resheader>
+    <resheader name="version">2.0</resheader>
+    <resheader name="reader">System.Resources.ResXResourceReader, System.Windows.Forms, ...</resheader>
+    <resheader name="writer">System.Resources.ResXResourceWriter, System.Windows.Forms, ...</resheader>
+    <data name="Name1"><value>this is my long string</value><comment>this is a comment</comment></data>
+    <data name="Color1" type="System.Drawing.Color, System.Drawing">Blue</data>
+    <data name="Bitmap1" mimetype="application/x-microsoft.net.object.binary.base64">
+        <value>[base64 mime encoded serialized .NET Framework object]</value>
+    </data>
+    <data name="Icon1" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
+        <value>[base64 mime encoded string representing a byte array form of the .NET Framework object]</value>
+        <comment>This is a comment</comment>
+    </data>
+                
+    There are any number of "resheader" rows that contain simple 
+    name/value pairs.
+    
+    Each data row contains a name, and value. The row also contains a 
+    type or mimetype. Type corresponds to a .NET class that support 
+    text/value conversion through the TypeConverter architecture. 
+    Classes that don't support this are serialized and stored with the 
+    mimetype set.
+    
+    The mimetype is used for serialized objects, and tells the 
+    ResXResourceReader how to depersist the object. This is currently not 
+    extensible. For a given mimetype the value must be set accordingly:
+    
+    Note - application/x-microsoft.net.object.binary.base64 is the format 
+    that the ResXResourceWriter will generate, however the reader can 
+    read any of the formats listed below.
+    
+    mimetype: application/x-microsoft.net.object.binary.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Binary.BinaryFormatter
+            : and then encoded with base64 encoding.
+    
+    mimetype: application/x-microsoft.net.object.soap.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Soap.SoapFormatter
+            : and then encoded with base64 encoding.
+
+    mimetype: application/x-microsoft.net.object.bytearray.base64
+    value   : The object must be serialized into a byte array 
+            : using a System.ComponentModel.TypeConverter
+            : and then encoded with base64 encoding.
+    -->
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="metadata">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" />
+              <xsd:attribute name="type" type="xsd:string" />
+              <xsd:attribute name="mimetype" type="xsd:string" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="assembly">
+            <xsd:complexType>
+              <xsd:attribute name="alias" type="xsd:string" />
+              <xsd:attribute name="name" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="Main_AddTab" xml:space="preserve">
+    <value>+ New Tab</value>
+  </data>
+  <data name="Main_AccountManager" xml:space="preserve">
+    <value>Account Manager</value>
+  </data>
+  <data name="Main_NewWindow" xml:space="preserve">
+    <value>New Window</value>
+  </data>
+  <data name="Main_Language" xml:space="preserve">
+    <value>Language</value>
+  </data>
+  <data name="Main_AccountWallet" xml:space="preserve">
+    <value>Account / Wallet</value>
+  </data>
+  <data name="Main_Enable" xml:space="preserve">
+    <value>Enable</value>
+  </data>
+  <data name="Main_Symbol" xml:space="preserve">
+    <value>Symbol</value>
+  </data>
+  <data name="Main_Interval" xml:space="preserve">
+    <value>Interval</value>
+  </data>
+  <data name="Main_Status" xml:space="preserve">
+    <value>Status</value>
+  </data>
+  <data name="Main_LastEvent" xml:space="preserve">
+    <value>Last Event</value>
+  </data>
+  <data name="Main_RefreshData" xml:space="preserve">
+    <value>Refresh Data</value>
+  </data>
+  <data name="Chart_Title" xml:space="preserve">
+    <value>Candlestick Chart</value>
+  </data>
+  <data name="OrderBook_Title" xml:space="preserve">
+    <value>Order Book</value>
+  </data>
+  <data name="OrderBook_TickSize" xml:space="preserve">
+    <value>Tick</value>
+  </data>
+  <data name="OrderBook_Price" xml:space="preserve">
+    <value>Price</value>
+  </data>
+  <data name="OrderBook_Size" xml:space="preserve">
+    <value>Size</value>
+  </data>
+  <data name="OrderBook_Total" xml:space="preserve">
+    <value>Total</value>
+  </data>
+  <data name="OrderBook_RecentTrades" xml:space="preserve">
+    <value>Recent Trades</value>
+  </data>
+  <data name="OrderBook_Time" xml:space="preserve">
+    <value>Time</value>
+  </data>
+  <data name="OrderBook_Side" xml:space="preserve">
+    <value>Side</value>
+  </data>
+  <data name="Trade_Side_Buy" xml:space="preserve">
+    <value>Buy</value>
+  </data>
+  <data name="Trade_Side_Sell" xml:space="preserve">
+    <value>Sell</value>
+  </data>
+  <data name="Trade_Side_Flat" xml:space="preserve">
+    <value>Flat</value>
+  </data>
+  <data name="OrderPanel_Tab_Order" xml:space="preserve">
+    <value>Order</value>
+  </data>
+  <data name="OrderPanel_Tab_Positions" xml:space="preserve">
+    <value>Positions</value>
+  </data>
+  <data name="OrderPanel_Tab_Orders" xml:space="preserve">
+    <value>Orders</value>
+  </data>
+  <data name="OrderPanel_Tab_Balances" xml:space="preserve">
+    <value>Balances</value>
+  </data>
+  <data name="OrderPanel_OrderType" xml:space="preserve">
+    <value>Order Type</value>
+  </data>
+  <data name="OrderPanel_Action" xml:space="preserve">
+    <value>Direction</value>
+  </data>
+  <data name="OrderType_Market" xml:space="preserve">
+    <value>Market</value>
+  </data>
+  <data name="OrderType_Limit" xml:space="preserve">
+    <value>Limit</value>
+  </data>
+  <data name="OrderSide_Long" xml:space="preserve">
+    <value>Long</value>
+  </data>
+  <data name="OrderSide_Short" xml:space="preserve">
+    <value>Short</value>
+  </data>
+  <data name="OrderPanel_Leverage" xml:space="preserve">
+    <value>Leverage</value>
+  </data>
+  <data name="OrderPanel_MarginMode" xml:space="preserve">
+    <value>Margin Mode</value>
+  </data>
+  <data name="OrderPanel_MarginModeHint_Default" xml:space="preserve">
+    <value>Select the target margin mode for this order.</value>
+  </data>
+  <data name="OrderPanel_MarginModeHint_BitMEX" xml:space="preserve">
+    <value>BitMEX supports Cross and Isolated. Multi-Asset Margin accounts are Cross-only.</value>
+  </data>
+  <data name="OrderPanel_MarginModeHint_Hyperliquid" xml:space="preserve">
+    <value>Hyperliquid supports Cross and Isolated. Some markets may still be isolated-only.</value>
+  </data>
+  <data name="OrderPanel_MarginModeHint_Aster" xml:space="preserve">
+    <value>Aster supports Cross and Isolated. Mode changes can be rejected when orders or positions are already open, and Multi-Asset Mode is Cross-only.</value>
+  </data>
+  <data name="OrderPanel_MarginModeHint_GRVT" xml:space="preserve">
+    <value>GRVT supports Cross and Isolated. Mode changes can be rejected when orders or positions are already open.</value>
+  </data>
+  <data name="OrderPanel_MarginModeHint_dYdX" xml:space="preserve">
+    <value>dYdX currently defaults to Cross in this app. Your current credential type is an API Trading Key / API Wallet Key, and dYdX only allows that credential type to trade in Cross mode, so Isolated is shown but disabled.</value>
+  </data>
+  <data name="OrderPanel_Leverage_Example" xml:space="preserve">
+    <value>e.g. 5</value>
+  </data>
+  <data name="OrderPanel_Amount" xml:space="preserve">
+    <value>Amount</value>
+  </data>
+  <data name="OrderPanel_Amount_Example" xml:space="preserve">
+    <value>e.g. 1</value>
+  </data>
+  <data name="OrderPanel_LimitPrice" xml:space="preserve">
+    <value>Limit Price</value>
+  </data>
+  <data name="OrderPanel_LimitPrice_Placeholder" xml:space="preserve">
+    <value>Price (Limit)</value>
+  </data>
+  <data name="OrderPanel_EstimatedCostUsd" xml:space="preserve">
+    <value>Estimated Cost (USD)</value>
+  </data>
+  <data name="OrderPanel_EstimatedLiqPrice" xml:space="preserve">
+    <value>Estimated Liquidation Price</value>
+  </data>
+  <data name="OrderPanel_SubmitOrder" xml:space="preserve">
+    <value>Submit Order</value>
+  </data>
+  <data name="Position_EntryPrice" xml:space="preserve">
+    <value>Entry Price</value>
+  </data>
+  <data name="Position_MarkPrice" xml:space="preserve">
+    <value>Mark Price</value>
+  </data>
+  <data name="Position_UnrealizedPct" xml:space="preserve">
+    <value>Unrealized PnL %</value>
+  </data>
+  <data name="Position_UnrealizedUsd" xml:space="preserve">
+    <value>Unrealized PnL USD</value>
+  </data>
+  <data name="Position_RealizedUsd" xml:space="preserve">
+    <value>Realized PnL USD</value>
+  </data>
+  <data name="Position_Close" xml:space="preserve">
+    <value>Close</value>
+  </data>
+  <data name="Position_Close_Amount_Watermark" xml:space="preserve">
+    <value>Amount (USD)</value>
+  </data>
+  <data name="Position_Close_Price_Watermark" xml:space="preserve">
+    <value>Price</value>
+  </data>
+  <data name="Position_Close_Limit" xml:space="preserve">
+    <value>Limit</value>
+  </data>
+  <data name="Position_Close_Limit_Hint_dYdX" xml:space="preserve">
+    <value>dYdX reduce-only close only supports IOC and will not rest as an open order. Use market close instead.</value>
+  </data>
+  <data name="Position_Close_Market" xml:space="preserve">
+    <value>Market</value>
+  </data>
+  <data name="Balance_Coin" xml:space="preserve">
+    <value>Coin</value>
+  </data>
+  <data name="Balance_Quantity" xml:space="preserve">
+    <value>Quantity</value>
+  </data>
+  <data name="OrderPanel_Cancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="OrderPanel_OrderId" xml:space="preserve">
+    <value>Order ID</value>
+  </data>
+  <data name="OrderPanel_OrderAction" xml:space="preserve">
+    <value>Action</value>
+  </data>
+  <data name="Empty_NoPositions" xml:space="preserve">
+    <value>No active positions.</value>
+  </data>
+  <data name="Empty_NoPendingOrders" xml:space="preserve">
+    <value>No pending orders.</value>
+  </data>
+  <data name="Empty_NoBalances" xml:space="preserve">
+    <value>No balance data.</value>
+  </data>
+  <data name="AccountManager_WindowTitle" xml:space="preserve">
+    <value>Account Manager</value>
+  </data>
+  <data name="AccountManager_Title" xml:space="preserve">
+    <value>Account Manager</value>
+  </data>
+  <data name="AccountManager_ExistingAccounts" xml:space="preserve">
+    <value>Accounts</value>
+  </data>
+  <data name="AccountManager_Edit" xml:space="preserve">
+    <value>Add / Update Account</value>
+  </data>
+  <data name="AccountManager_DisplayName" xml:space="preserve">
+    <value>Display Name</value>
+  </data>
+  <data name="AccountManager_Summary" xml:space="preserve">
+    <value>Summary (for example, masked account, wallet, or purpose)</value>
+  </data>
+  <data name="AccountManager_ApiKey" xml:space="preserve">
+    <value>API Key</value>
+  </data>
+  <data name="AccountManager_ApiSecret" xml:space="preserve">
+    <value>API Secret</value>
+  </data>
+  <data name="AccountManager_AccountAddress" xml:space="preserve">
+    <value>Account Address / Public Address</value>
+  </data>
+  <data name="AccountManager_ApiWalletAddress" xml:space="preserve">
+    <value>Wallet Address (signing)</value>
+  </data>
+  <data name="AccountManager_ApiWalletPrivateKey" xml:space="preserve">
+    <value>Private Key (signing)</value>
+  </data>
+  <data name="AccountManager_AddAccount" xml:space="preserve">
+    <value>Add Account</value>
+  </data>
+  <data name="AccountManager_UpdateCreds" xml:space="preserve">
+    <value>Update Credentials</value>
+  </data>
+  <data name="AccountManager_TestConnection" xml:space="preserve">
+    <value>Test Connection</value>
+  </data>
+  <data name="AccountManager_ToggleEnabled" xml:space="preserve">
+    <value>Enable / Disable</value>
+  </data>
+  <data name="AccountManager_Delete" xml:space="preserve">
+    <value>Delete</value>
+  </data>
+  <data name="AccountManager_Close" xml:space="preserve">
+    <value>Close</value>
+  </data>
+  <data name="AccountManager_NotTested" xml:space="preserve">
+    <value>Not tested yet</value>
+  </data>
+  <data name="AccountManager_CredentialsUpdated" xml:space="preserve">
+    <value>Credentials updated</value>
+  </data>
+  <data name="AccountManager_GrvtWalletRequired" xml:space="preserve">
+    <value>GRVT API key login supports data access, but order placement requires WalletAddress + PrivateKey for order.signature.</value>
+  </data>
+  <data name="AccountManager_GrvtWalletConfigured" xml:space="preserve">
+    <value>GRVT wallet signing credentials are configured. Order placement can generate order.signature.</value>
+  </data>
+  <data name="Toast_LastTabCannotClose" xml:space="preserve">
+    <value>The last tab cannot be closed.</value>
+  </data>
+  <data name="Toast_AccountAdded" xml:space="preserve">
+    <value>Account added.</value>
+  </data>
+  <data name="Toast_CredentialsUpdated" xml:space="preserve">
+    <value>Credentials updated.</value>
+  </data>
+  <data name="Toast_TestConnectionSuccess" xml:space="preserve">
+    <value>Connection test succeeded.</value>
+  </data>
+  <data name="Toast_TestConnectionFailed" xml:space="preserve">
+    <value>Connection test failed: </value>
+  </data>
+  <data name="Toast_TestConnectionException" xml:space="preserve">
+    <value>Connection test exception</value>
+  </data>
+  <data name="Toast_ApiSessionLockedChangeViaApi" xml:space="preserve">
+    <value>This tab is managed by an API shared session. Please change it via API.</value>
+  </data>
+  <data name="Toast_ApiSessionLocked" xml:space="preserve">
+    <value>This tab is managed by an API shared session.</value>
+  </data>
+  <data name="Toast_Connected" xml:space="preserve">
+    <value>Connected: </value>
+  </data>
+  <data name="Toast_ConnectTimeout" xml:space="preserve">
+    <value>Connection timed out. Check network or API settings.</value>
+  </data>
+  <data name="Toast_ConnectFailed" xml:space="preserve">
+    <value>Connection failed: </value>
+  </data>
+  <data name="Toast_OrderSuccess" xml:space="preserve">
+    <value>Order submitted successfully.</value>
+  </data>
+  <data name="Toast_OrderFailed" xml:space="preserve">
+    <value>Order failed: </value>
+  </data>
+  <data name="Toast_OrderException" xml:space="preserve">
+    <value>Order exception: </value>
+  </data>
+  <data name="Toast_RefreshDataCompleted12h" xml:space="preserve">
+    <value>Data refresh completed (last 12 hours).</value>
+  </data>
+  <data name="Toast_RefreshDataFailed" xml:space="preserve">
+    <value>Data refresh failed: </value>
+  </data>
+  <data name="Toast_ReloadDataFailed" xml:space="preserve">
+    <value>Data reload failed: </value>
+  </data>
+  <data name="Toast_CloseInProgress" xml:space="preserve">
+    <value>Close order is in progress. Please wait.</value>
+  </data>
+  <data name="Toast_PositionNotFound" xml:space="preserve">
+    <value>Position not found.</value>
+  </data>
+  <data name="Toast_CloseNoPrice" xml:space="preserve">
+    <value>Close failed: no market reference price.</value>
+  </data>
+  <data name="Toast_ClosePriceInvalid" xml:space="preserve">
+    <value>Invalid close price format.</value>
+  </data>
+  <data name="Toast_CloseQtyZero" xml:space="preserve">
+    <value>Close failed: position quantity is zero.</value>
+  </data>
+  <data name="Toast_CloseQtyUnavailable" xml:space="preserve">
+    <value>Close failed: cannot determine position quantity.</value>
+  </data>
+  <data name="Toast_CloseLimitSent" xml:space="preserve">
+    <value>Limit close order submitted.</value>
+  </data>
+  <data name="Toast_CloseMarketSent" xml:space="preserve">
+    <value>Market close order submitted.</value>
+  </data>
+  <data name="Toast_CloseFailed" xml:space="preserve">
+    <value>Close failed: </value>
+  </data>
+  <data name="Toast_CloseException" xml:space="preserve">
+    <value>Close exception: </value>
+  </data>
+  <data name="Toast_LocalPendingRemoved" xml:space="preserve">
+    <value>Local pending order removed.</value>
+  </data>
+  <data name="Toast_OrderNoCancelableId" xml:space="preserve">
+    <value>No cancelable identifier for this order.</value>
+  </data>
+  <data name="Toast_CancelSuccess" xml:space="preserve">
+    <value>Order canceled successfully.</value>
+  </data>
+  <data name="Toast_CancelFailed" xml:space="preserve">
+    <value>Cancel failed: </value>
+  </data>
+  <data name="Toast_CancelException" xml:space="preserve">
+    <value>Cancel exception: </value>
+  </data>
+  <data name="AccountManager_VenueCapability_Aster" xml:space="preserve">
+    <value />
+  </data>
+  <data name="AccountManager_SubAccountId" xml:space="preserve">
+    <value />
+  </data>
+  <data name="AccountManager_VenueCapability_GRVT" xml:space="preserve">
+    <value />
+  </data>
+  <data name="AccountManager_VenueCapability_BitMEX" xml:space="preserve">
+    <value />
+  </data>
+  <data name="AccountManager_TestAvailableAfterSave" xml:space="preserve">
+    <value />
+  </data>
+  <data name="AccountManager_VenueCapability_Hyperliquid" xml:space="preserve">
+    <value />
+  </data>
+  <data name="AccountManager_VenueCapability_dYdX" xml:space="preserve">
+    <value>Auth mode: wallet only. Account Address must be a dYdX chain address starting with dydx, not 0x. If Account Address is left blank or filled with an EVM address, the app falls back to the signing Wallet Address. Wallet Address and Private Key are used for signing. Sub Account Id is optional and defaults to 0, and it should be the parent subaccount number (0-127). Cross and Isolated orders are supported, but Isolated requires the owner wallet and does not work with front-end generated API Trading Keys.</value>
+  </data>
+  <data name="Dashboard_Title" xml:space="preserve">
+    <value>Dashboard</value>
+  </data>
+  <data name="Dashboard_EnableMarketInfo" xml:space="preserve">
+    <value>Enable Market Info</value>
+  </data>
+  <data name="Dashboard_RefreshPage" xml:space="preserve">
+    <value>Refresh Page</value>
+  </data>
+  <data name="Dashboard_OptionsTitle" xml:space="preserve">
+    <value>Options</value>
+  </data>
+  <data name="Dashboard_ShowTestnet" xml:space="preserve">
+    <value>Show testnet</value>
+  </data>
+  <data name="Dashboard_EnabledAccounts" xml:space="preserve">
+    <value>Enabled Accounts</value>
+  </data>
+  <data name="Dashboard_NoAccountsSelected" xml:space="preserve">
+    <value>No accounts selected</value>
+  </data>
+  <data name="Dashboard_AccountsSelectedCount" xml:space="preserve">
+    <value>{0} accounts selected</value>
+  </data>
+  <data name="Dashboard_SelectAll" xml:space="preserve">
+    <value>Select all</value>
+  </data>
+  <data name="Dashboard_Stop" xml:space="preserve">
+    <value>Stop</value>
+  </data>
+  <data name="Dashboard_Confirm" xml:space="preserve">
+    <value>Confirm</value>
+  </data>
+  <data name="Dashboard_SelectAtLeastOneAccount" xml:space="preserve">
+    <value>Select at least one account.</value>
+  </data>
+  <data name="Dashboard_SelectSymbolFirst" xml:space="preserve">
+    <value>Select a symbol first.</value>
+  </data>
+  <data name="Dashboard_SelectMarketRowFirst" xml:space="preserve">
+    <value>Select a live market row first.</value>
+  </data>
+  <data name="Dashboard_OrderPreviewToast" xml:space="preserve">
+    <value>Order preview: {0} {1} / {2} / {3} / leverage {4}x / amount {5} / price {6}</value>
+  </data>
+  <data name="Dashboard_CloseLimitToast" xml:space="preserve">
+    <value>Submitted a limit close request for {0} {1}.</value>
+  </data>
+  <data name="Dashboard_CloseMarketToast" xml:space="preserve">
+    <value>Submitted a market close request for {0} {1}.</value>
+  </data>
+  <data name="Dashboard_CancelOrderToast" xml:space="preserve">
+    <value>Submitted a cancel request for {0} {1}.</value>
+  </data>
+  <data name="Dashboard_DuplicateVenueWarning" xml:space="preserve">
+    <value>You selected multiple accounts from the same exchange. Only the first selection will be used.</value>
+  </data>
+  <data name="Dashboard_MarketInfoRefreshing" xml:space="preserve">
+    <value>Refreshing market info...</value>
+  </data>
+  <data name="Dashboard_MarketInfoSuspended" xml:space="preserve">
+    <value>The left panel has been hidden for more than 5 seconds. Background caching is paused.</value>
+  </data>
+  <data name="Dashboard_MarketInfoError" xml:space="preserve">
+    <value>Market info refresh failed: {0}</value>
+  </data>
+  <data name="Dashboard_MarketInfoEnabled" xml:space="preserve">
+    <value>Market info cache is enabled.</value>
+  </data>
+  <data name="Dashboard_MarketInfoDisabled" xml:space="preserve">
+    <value>Market info cache is disabled.</value>
+  </data>
+  <data name="Dashboard_LiveInfoTitle" xml:space="preserve">
+    <value>Live Info</value>
+  </data>
+  <data name="Dashboard_OrderTitle" xml:space="preserve">
+    <value>Unified Order Entry</value>
+  </data>
+  <data name="Dashboard_Side" xml:space="preserve">
+    <value>Long / Short</value>
+  </data>
+  <data name="Dashboard_Leverage" xml:space="preserve">
+    <value>Leverage</value>
+  </data>
+  <data name="Dashboard_Amount" xml:space="preserve">
+    <value>Amount</value>
+  </data>
+  <data name="Dashboard_OrderType" xml:space="preserve">
+    <value>Order</value>
+  </data>
+  <data name="Dashboard_TargetPrice" xml:space="preserve">
+    <value>Target Price</value>
+  </data>
+  <data name="Dashboard_Margin" xml:space="preserve">
+    <value>Margin</value>
+  </data>
+  <data name="Dashboard_LiquidPrice" xml:space="preserve">
+    <value>Liquid Price</value>
+  </data>
+  <data name="Dashboard_SubmitOrder" xml:space="preserve">
+    <value>Submit Order</value>
+  </data>
+  <data name="Dashboard_PositionsTitle" xml:space="preserve">
+    <value>Position Management</value>
+  </data>
+  <data name="Dashboard_OrdersTitle" xml:space="preserve">
+    <value>Order Management</value>
+  </data>
+  <data name="Dashboard_Col_Exchange" xml:space="preserve">
+    <value>Exchange</value>
+  </data>
+  <data name="Dashboard_Col_Price" xml:space="preserve">
+    <value>Price</value>
+  </data>
+  <data name="Dashboard_Col_Pnl" xml:space="preserve">
+    <value>PNL</value>
+  </data>
+  <data name="Dashboard_Col_Balance" xml:space="preserve">
+    <value>Balance</value>
+  </data>
+  <data name="Dashboard_Col_Available" xml:space="preserve">
+    <value>Available</value>
+  </data>
+  <data name="Dashboard_Col_Mode" xml:space="preserve">
+    <value>Mode</value>
+  </data>
+  <data name="Dashboard_Col_Amount" xml:space="preserve">
+    <value>Amount</value>
+  </data>
+  <data name="Dashboard_Col_Entry" xml:space="preserve">
+    <value>Entry</value>
+  </data>
+  <data name="Dashboard_Col_Limit" xml:space="preserve">
+    <value>Limit</value>
+  </data>
+  <data name="Dashboard_Close" xml:space="preserve">
+    <value>Close</value>
+  </data>
+  <data name="Dashboard_Cancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="Main_AgentSettings" xml:space="preserve">
+    <value>Agent Settings</value>
+  </data>
+  <data name="Main_HttpApiStatusOff" xml:space="preserve">
+    <value>HTTP API: OFF</value>
+  </data>
+  <data name="Main_HttpApiStatusInitializing" xml:space="preserve">
+    <value>HTTP API: Initializing ({0})</value>
+  </data>
+  <data name="Main_HttpApiStatusInitializingNoPort" xml:space="preserve">
+    <value>HTTP API: Initializing</value>
+  </data>
+  <data name="Main_HttpApiStatusOn" xml:space="preserve">
+    <value>HTTP API: ON ({0})</value>
+  </data>
+  <data name="Main_HttpApiStatusOnNoPort" xml:space="preserve">
+    <value>HTTP API: ON</value>
+  </data>
+  <data name="Main_HttpApiStatusError" xml:space="preserve">
+    <value>HTTP API: ERROR</value>
+  </data>
+  <data name="Agent_RunHistoryTitle" xml:space="preserve">
+    <value>AI Agent Runs</value>
+  </data>
+  <data name="Agent_RunNow" xml:space="preserve">
+    <value>Run Now</value>
+  </data>
+  <data name="Agent_Enable" xml:space="preserve">
+    <value>Enable AI Agent</value>
+  </data>
+  <data name="Agent_Type" xml:space="preserve">
+    <value>AI Agent</value>
+  </data>
+  <data name="Agent_WakeInterval" xml:space="preserve">
+    <value>Wake Interval (M)</value>
+  </data>
+  <data name="Agent_WakeIntervalFormat" xml:space="preserve">
+    <value>Every {0} minute(s)</value>
+  </data>
+  <data name="Agent_LastRun" xml:space="preserve">
+    <value>Last Run</value>
+  </data>
+  <data name="Agent_NoRuns" xml:space="preserve">
+    <value>No runs yet</value>
+  </data>
+  <data name="Agent_Enabled" xml:space="preserve">
+    <value>Enabled</value>
+  </data>
+  <data name="Agent_Disabled" xml:space="preserve">
+    <value>Disabled</value>
+  </data>
+  <data name="Agent_Col_Time" xml:space="preserve">
+    <value>Time</value>
+  </data>
+  <data name="Agent_Col_Agent" xml:space="preserve">
+    <value>Agent</value>
+  </data>
+  <data name="Agent_Col_Command" xml:space="preserve">
+    <value>Command</value>
+  </data>
+  <data name="Agent_Col_Output" xml:space="preserve">
+    <value>Output Summary</value>
+  </data>
+  <data name="Agent_DetailButton" xml:space="preserve">
+    <value>Detail</value>
+  </data>
+  <data name="Agent_Function" xml:space="preserve">
+    <value>Function</value>
+  </data>
+  <data name="Agent_Delete" xml:space="preserve">
+    <value>Delete</value>
+  </data>
+  <data name="Agent_ClearHistory" xml:space="preserve">
+    <value>Clear History</value>
+  </data>
+  <data name="Agent_ClearHistoryConfirmTitle" xml:space="preserve">
+    <value>Clear AI Agent History</value>
+  </data>
+  <data name="Agent_ClearHistoryConfirmMessage" xml:space="preserve">
+    <value>Clear all AI Agent execution records?</value>
+  </data>
+  <data name="Agent_DeleteRunConfirmTitle" xml:space="preserve">
+    <value>Delete AI Agent Record</value>
+  </data>
+  <data name="Agent_DeleteRunConfirmMessage" xml:space="preserve">
+    <value>Delete the AI Agent execution record started at {0}?</value>
+  </data>
+  <data name="Agent_ClearHistorySuccess" xml:space="preserve">
+    <value>AI Agent execution history cleared.</value>
+  </data>
+  <data name="Agent_DeleteRunSuccess" xml:space="preserve">
+    <value>AI Agent execution record deleted.</value>
+  </data>
+  <data name="Common_Confirm" xml:space="preserve">
+    <value>Confirm</value>
+  </data>
+  <data name="Common_Cancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="Agent_CommandTemplate" xml:space="preserve">
+    <value>Command Template</value>
+  </data>
+  <data name="Agent_PromptTemplate" xml:space="preserve">
+    <value>Prompt Template</value>
+  </data>
+  <data name="Agent_WorkingDirectory" xml:space="preserve">
+    <value>Working Directory</value>
+  </data>
+  <data name="Agent_EnvironmentVariables" xml:space="preserve">
+    <value>Environment Variables</value>
+  </data>
+  <data name="Agent_EnvironmentVariables_Placeholder" xml:space="preserve">
+    <value>Example:
+OPENAI_API_KEY=your_api_key
+CODEX_HOME=C:\Users\YourName\.codex</value>
+  </data>
+  <data name="Agent_TimeoutSeconds" xml:space="preserve">
+    <value>Timeout (S)</value>
+  </data>
+  <data name="Agent_Browse" xml:space="preserve">
+    <value>Browse</value>
+  </data>
+  <data name="Agent_McpRequired" xml:space="preserve">
+    <value>AiyoPerps MCP Required</value>
+  </data>
+  <data name="Agent_McpInstallHint" xml:space="preserve">
+    <value>The AI Agent must have AiyoPerps MCP installed before scheduled runs can access app data. Use aiyoperps-mcp-bridge and aiyoperps-mcp-installer.</value>
+  </data>
+  <data name="Agent_CopyInstallCommand" xml:space="preserve">
+    <value>Copy Install Command</value>
+  </data>
+  <data name="Agent_OpenInstallGuide" xml:space="preserve">
+    <value>Open Install Guide</value>
+  </data>
+  <data name="Agent_ResetTemplate" xml:space="preserve">
+    <value>Reset Template</value>
+  </data>
+  <data name="Agent_TestRun" xml:space="preserve">
+    <value>Test Run</value>
+  </data>
+  <data name="Agent_Save" xml:space="preserve">
+    <value>Save</value>
+  </data>
+  <data name="Agent_Close" xml:space="preserve">
+    <value>Close</value>
+  </data>
+  <data name="Agent_SettingsSaved" xml:space="preserve">
+    <value>AI Agent settings saved.</value>
+  </data>
+  <data name="Agent_TestRunStarted" xml:space="preserve">
+    <value>Test run started.</value>
+  </data>
+  <data name="Agent_TestRunCompleted" xml:space="preserve">
+    <value>Test run completed with status: {0}</value>
+  </data>
+  <data name="Agent_RunCompleted" xml:space="preserve">
+    <value>AI Agent run completed with status: {0}</value>
+  </data>
+  <data name="Agent_DetailTitle" xml:space="preserve">
+    <value>AI Agent Run Detail</value>
+  </data>
+  <data name="Agent_Output" xml:space="preserve">
+    <value>Agent Output</value>
+  </data>
+  <data name="Agent_ExecutionLog" xml:space="preserve">
+    <value>Execution Log</value>
+  </data>
+  <data name="Agent_HeaderInfo" xml:space="preserve">
+    <value>Header Info</value>
+  </data>
+  <data name="Agent_DetailEmpty" xml:space="preserve">
+    <value>Select a run to view its details.</value>
+  </data>
+  <data name="Agent_RunId" xml:space="preserve">
+    <value>Run Id</value>
+  </data>
+  <data name="Agent_StartedAt" xml:space="preserve">
+    <value>Started At</value>
+  </data>
+  <data name="Agent_FinishedAt" xml:space="preserve">
+    <value>Finished At</value>
+  </data>
+  <data name="Agent_Duration" xml:space="preserve">
+    <value>Duration</value>
+  </data>
+  <data name="Agent_ExitCode" xml:space="preserve">
+    <value>Exit Code</value>
+  </data>
+  <data name="Agent_RenderedCommand" xml:space="preserve">
+    <value>Rendered Command</value>
+  </data>
+  <data name="Agent_RenderedPrompt" xml:space="preserve">
+    <value>Rendered Prompt</value>
+  </data>
+  <data name="Agent_CopyCommand" xml:space="preserve">
+    <value>Copy Command</value>
+  </data>
+  <data name="Agent_CopyPrompt" xml:space="preserve">
+    <value>Copy Prompt</value>
+  </data>
+  <data name="Agent_CopyStdout" xml:space="preserve">
+    <value>Copy Stdout</value>
+  </data>
+  <data name="Agent_CopyStderr" xml:space="preserve">
+    <value>Copy Stderr</value>
+  </data>
+</root>

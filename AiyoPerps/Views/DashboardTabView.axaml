@@ -1,0 +1,404 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:dg="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.DataGrid"
+             xmlns:vm="using:AiyoPerps.ViewModels"
+             x:Class="AiyoPerps.Views.DashboardTabView"
+             x:Name="ViewRoot"
+             x:DataType="vm:DashboardTabViewModel">
+  <Grid Margin="0,6,0,0">
+    <Grid x:Name="RootGrid"
+          ColumnDefinitions="2*,3*"
+          ColumnSpacing="12"
+          SizeChanged="OnRootSizeChanged">
+      <Border Grid.Column="0"
+            Classes="card"
+            IsVisible="{Binding IsMarketPanelVisible}">
+        <Grid RowDefinitions="Auto,Auto,3.5*,6.5*" RowSpacing="10">
+          <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
+            <TextBlock Text="{Binding L[Agent_RunHistoryTitle]}"
+                       FontWeight="Bold"
+                       Foreground="#E2F7FB" />
+            <Button Grid.Column="1"
+                    Content="{Binding L[Agent_RunNow]}"
+                    Command="{Binding RunAgentNowCommand}"
+                    Classes="ghost" />
+            <Button Grid.Column="2"
+                    Content="{Binding L[Main_AgentSettings]}"
+                    Click="OnOpenAgentSettingsClick"
+                    Classes="ghost" />
+            <Button Grid.Column="3"
+                    Content="{Binding L[Agent_ClearHistory]}"
+                    Click="OnClearAgentRunHistoryClick"
+                    Classes="ghost" />
+          </Grid>
+
+          <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="4">
+            <TextBlock Text="{Binding L[Agent_Enable]}" Classes="label" />
+            <TextBlock Grid.Column="1" Text="{Binding AgentEnableState}" Classes="label" />
+            <TextBlock Grid.Column="2" Text="{Binding L[Agent_Type]}" Classes="label" />
+            <TextBlock Grid.Column="3" Text="{Binding AgentSelectedType}" Classes="label" />
+
+            <TextBlock Grid.Row="1" Text="{Binding L[Agent_WakeInterval]}" Classes="label" />
+            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding AgentWakeInterval}" Classes="label" />
+            <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding L[Agent_LastRun]}" Classes="label" />
+            <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding AgentLastRunTime}" Classes="label" />
+          </Grid>
+
+          <dg:DataGrid Grid.Row="2"
+                       AutoGenerateColumns="False"
+                       ItemsSource="{Binding AIAgentRuns}"
+                       SelectedItem="{Binding SelectedAIAgentRun}"
+                       CanUserSortColumns="True"
+                       MinHeight="160">
+            <dg:DataGrid.Columns>
+              <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Agent_Col_Time]}" Binding="{Binding StartedAtDisplay}" />
+              <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Agent_Col_Agent]}" Binding="{Binding AgentDisplayName}" />
+              <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Main_Status]}" Binding="{Binding Status}" />
+              <dg:DataGridTemplateColumn Header="{Binding #ViewRoot.DataContext.L[Agent_Delete]}">
+                <dg:DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:AIAgentRunSummaryItem">
+                    <Button Content="{Binding DataContext.L[Agent_Delete], RelativeSource={RelativeSource AncestorType=UserControl}}"
+                            Click="OnDeleteAgentRunClick" />
+                  </DataTemplate>
+                </dg:DataGridTemplateColumn.CellTemplate>
+              </dg:DataGridTemplateColumn>
+            </dg:DataGrid.Columns>
+          </dg:DataGrid>
+
+          <Border Grid.Row="3"
+                  BorderBrush="#223A42"
+                  BorderThickness="1"
+                  CornerRadius="10"
+                  Padding="12">
+            <Grid RowDefinitions="Auto,*" RowSpacing="10">
+              <TextBlock Text="{Binding L[Agent_DetailTitle]}"
+                         FontWeight="Bold"
+                         Foreground="#E2F7FB" />
+
+              <ScrollViewer Grid.Row="1"
+                            IsVisible="{Binding HasSelectedAIAgentRunDetail}"
+                            VerticalScrollBarVisibility="Auto"
+                            Padding="0,0,8,0">
+                <StackPanel Spacing="10">
+                  <TextBlock Text="{Binding L[Agent_Output]}" FontWeight="Bold" Foreground="#E2F7FB" />
+                  <TextBox Text="{Binding SelectedAIAgentRunDetail.Record.Stdout}"
+                           IsReadOnly="True"
+                           AcceptsReturn="True"
+                           TextWrapping="Wrap"
+                           FontFamily="Consolas"
+                           MinHeight="120" />
+
+                  <TextBlock Text="{Binding L[Agent_ExecutionLog]}" FontWeight="Bold" Foreground="#E2F7FB" />
+                  <TextBox Text="{Binding SelectedAIAgentRunDetail.Record.Stderr}"
+                           IsReadOnly="True"
+                           AcceptsReturn="True"
+                           TextWrapping="Wrap"
+                           FontFamily="Consolas"
+                           MinHeight="96" />
+
+                  <TextBlock Text="{Binding L[Agent_RenderedCommand]}" FontWeight="Bold" Foreground="#E2F7FB" />
+                  <TextBox Text="{Binding SelectedAIAgentRunDetail.Record.RenderedCommand}"
+                           IsReadOnly="True"
+                           AcceptsReturn="True"
+                           TextWrapping="Wrap"
+                           FontFamily="Consolas"
+                           MinHeight="72" />
+
+                  <TextBlock Text="{Binding L[Agent_RenderedPrompt]}" FontWeight="Bold" Foreground="#E2F7FB" />
+                  <TextBox Text="{Binding SelectedAIAgentRunDetail.Record.RenderedPrompt}"
+                           IsReadOnly="True"
+                           AcceptsReturn="True"
+                           TextWrapping="Wrap"
+                           FontFamily="Consolas"
+                           MinHeight="96" />
+
+                  <TextBlock Text="{Binding L[Agent_HeaderInfo]}" FontWeight="Bold" Foreground="#E2F7FB" />
+                  <Grid ColumnDefinitions="Auto,*,Auto,*"
+                        RowDefinitions="Auto,Auto,Auto,Auto"
+                        ColumnSpacing="10"
+                        RowSpacing="6">
+                    <TextBlock Text="{Binding L[Agent_RunId]}" Classes="label" />
+                    <TextBlock Grid.Column="1" Text="{Binding SelectedAIAgentRunDetail.Record.RunId}" />
+
+                    <TextBlock Grid.Column="2" Text="{Binding L[Agent_Type]}" Classes="label" />
+                    <TextBlock Grid.Column="3" Text="{Binding SelectedAIAgentRunDetail.AgentDisplayName}" />
+
+                    <TextBlock Grid.Row="1" Text="{Binding L[Agent_StartedAt]}" Classes="label" />
+                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedAIAgentRunDetail.StartedAtDisplay}" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding L[Agent_FinishedAt]}" Classes="label" />
+                    <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding SelectedAIAgentRunDetail.FinishedAtDisplay}" />
+
+                    <TextBlock Grid.Row="2" Text="{Binding L[Agent_Duration]}" Classes="label" />
+                    <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SelectedAIAgentRunDetail.DurationDisplay}" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding L[Main_Status]}" Classes="label" />
+                    <TextBlock Grid.Row="2" Grid.Column="3" Text="{Binding SelectedAIAgentRunDetail.Record.Status}" />
+
+                    <TextBlock Grid.Row="3" Text="{Binding L[Agent_ExitCode]}" Classes="label" />
+                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding SelectedAIAgentRunDetail.Record.ExitCode}" />
+
+                    <TextBlock Grid.Row="3" Grid.Column="2" Text="{Binding L[Agent_WorkingDirectory]}" Classes="label" />
+                    <TextBlock Grid.Row="3" Grid.Column="3" Text="{Binding SelectedAIAgentRunDetail.Record.WorkingDirectory}" TextWrapping="Wrap" />
+                  </Grid>
+                </StackPanel>
+              </ScrollViewer>
+
+              <TextBlock Grid.Row="1"
+                         IsVisible="{Binding HasNoSelectedAIAgentRunDetail}"
+                         Text="{Binding L[Agent_DetailEmpty]}"
+                         TextWrapping="Wrap"
+                         VerticalAlignment="Center"
+                         HorizontalAlignment="Center"
+                         Foreground="#9EC1C8" />
+            </Grid>
+          </Border>
+        </Grid>
+      </Border>
+
+      <ScrollViewer Grid.Column="1" Padding="0,0,10,0"
+                    VerticalScrollBarVisibility="Auto"
+                    HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Spacing="12">
+          <Border Classes="card">
+            <Expander IsExpanded="{Binding IsOptionsExpanded}" HorizontalAlignment="Stretch">
+              <Expander.Header>
+                <TextBlock Text="{Binding L[Dashboard_OptionsTitle]}" FontWeight="Bold" Foreground="#E2F7FB" />
+              </Expander.Header>
+              <WrapPanel Margin="0,12,0,0" Orientation="Horizontal" ItemSpacing="10">
+                <StackPanel Margin="0,0,12,12" Spacing="6">
+                  <TextBlock Text="{Binding L[Dashboard_ShowTestnet]}" Classes="label" />
+                  <CheckBox Content="{Binding L[Dashboard_ShowTestnet]}"
+                            IsChecked="{Binding ShowTestnet}"
+                            IsEnabled="{Binding CanEditFilters}" />
+                </StackPanel>
+
+              <StackPanel Margin="0,0,12,12" Spacing="6">
+                <TextBlock Text="{Binding L[Dashboard_EnabledAccounts]}" Classes="label" />
+                <Expander IsExpanded="{Binding IsAccountsExpanded}" MinHeight="36">
+                  <Expander.Header>
+                    <TextBlock Text="{Binding SelectedAccountsSummary}" />
+                  </Expander.Header>
+                  <ItemsControl ItemsSource="{Binding Accounts}" Margin="0">
+                    <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:DashboardAccountSelectionItem">
+                        <CheckBox Content="{Binding DisplayText}"
+                                  IsChecked="{Binding IsChecked}"
+                                  IsEnabled="{Binding DataContext.CanEditFilters, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                    </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </Expander>
+              </StackPanel>
+
+              <StackPanel Margin="0,0,12,12" Spacing="6">
+                <TextBlock Text="{Binding L[Main_Symbol]}" Classes="label" />
+                <ComboBox ItemsSource="{Binding SymbolOptions}"
+                          SelectedItem="{Binding SelectedSymbolOption}"
+                          DisplayMemberBinding="{Binding Display}"
+                          IsEnabled="{Binding CanEditFilters}" />
+              </StackPanel>
+
+              <StackPanel Margin="0,0,12,12" Spacing="6">
+                <TextBlock Text="{Binding L[Main_Interval]}" Classes="label" />
+                <ComboBox Width="160"
+                          ItemsSource="{Binding IntervalOptions}"
+                          SelectedItem="{Binding SelectedInterval}"
+                          IsEnabled="{Binding CanEditFilters}" />
+              </StackPanel>
+
+            <Button Width="120" HorizontalContentAlignment="Center" VerticalAlignment="Center"
+                    Content="{Binding ToggleDashboardText}"
+                    Command="{Binding ToggleDashboardCommand}"
+                    IsEnabled="{Binding CanToggleDashboard}"
+                    Classes="cta" />
+            </WrapPanel>
+          </Expander>
+        </Border>
+
+          <Grid ColumnDefinitions="1.5*,1*" ColumnSpacing="12">
+          <Border Grid.Column="0" Classes="card">
+            <Grid RowDefinitions="Auto,*" RowSpacing="8">
+              <TextBlock Text="{Binding L[Dashboard_LiveInfoTitle]}" FontWeight="Bold" Foreground="#E2F7FB" />
+              <dg:DataGrid Grid.Row="1"
+                           AutoGenerateColumns="False"
+                           ItemsSource="{Binding MarketRows}"
+                           SelectedItem="{Binding SelectedMarketRow}"
+                           CanUserSortColumns="True"
+                           MinHeight="220">
+                <dg:DataGrid.Columns>
+                  <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Exchange]}" Binding="{Binding Exchange}" />
+                  <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Price]}" Binding="{Binding Price, StringFormat={}{0:N2}}" />
+                  <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Pnl]}" Binding="{Binding Pnl, StringFormat={}{0:N2}}" />
+                  <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Balance]}" Binding="{Binding Balance, StringFormat={}{0:N2}}" />
+                  <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Available]}" Binding="{Binding AvailableBalance, StringFormat={}{0:N2}}" />
+                </dg:DataGrid.Columns>
+              </dg:DataGrid>
+            </Grid>
+          </Border>
+
+          <Border Grid.Column="1" Classes="card">
+            <StackPanel Spacing="8">
+              <TextBlock Text="{Binding L[Dashboard_OrderTitle]}" FontWeight="Bold" Foreground="#E2F7FB" />
+
+              <StackPanel Orientation="Horizontal" Spacing="12">
+               <TextBlock Text="{Binding L[Dashboard_Side]}" Classes="label" VerticalAlignment="Center" />
+               <RadioButton Content="{Binding L[OrderSide_Long]}"
+                             GroupName="DashboardSide"
+                             IsChecked="{Binding IsLongOrder}" />
+                <RadioButton Content="{Binding L[OrderSide_Short]}"
+                             GroupName="DashboardSide"
+                             IsChecked="{Binding IsShortOrder}" />
+              </StackPanel>
+
+              <StackPanel Orientation="Horizontal" Spacing="12">
+                <TextBlock Text="{Binding L[Dashboard_Col_Mode]}" Classes="label" VerticalAlignment="Center" />
+                <RadioButton Content="Cross"
+                             GroupName="DashboardMarginMode"
+                             IsChecked="{Binding IsCrossMarginModeSelected}" />
+                <RadioButton Content="Isolated"
+                             GroupName="DashboardMarginMode"
+                             IsChecked="{Binding IsIsolatedMarginModeSelected}"
+                             IsEnabled="{Binding CanUseIsolatedMarginMode}" />
+              </StackPanel>
+
+              <StackPanel Orientation="Horizontal" Spacing="16">
+                  <TextBlock Text="{Binding L[Dashboard_Leverage]}" Classes="label" VerticalAlignment="Center" />
+                  <TextBlock Text="{Binding Leverage, StringFormat={}{0:N0}x}" VerticalAlignment="Center" />
+                  <Slider Minimum="1" Width="150"
+                          Maximum="{Binding MaxLeverage}"
+                          Value="{Binding Leverage}" />
+              </StackPanel>
+              
+              <StackPanel Orientation="Horizontal" Spacing="12">
+                  <TextBlock Text="{Binding L[Dashboard_Amount]}" Classes="label" VerticalAlignment="Center" />
+                  <TextBox Text="{Binding OrderAmount}" Width="150" />
+              </StackPanel>
+
+              <StackPanel Orientation="Horizontal" Spacing="12">
+              <TextBlock Text="{Binding L[Dashboard_OrderType]}" Classes="label" VerticalAlignment="Center" />
+                <RadioButton Content="{Binding L[OrderType_Market]}"
+                             GroupName="DashboardOrderType"
+                             IsChecked="{Binding IsMarketOrder}" />
+                <RadioButton Content="{Binding L[OrderType_Limit]}"
+                             GroupName="DashboardOrderType"
+                             IsChecked="{Binding IsLimitOrder}" />
+                  <TextBox Text="{Binding OrderPrice}" Width="100"
+                           IsEnabled="{Binding IsLimitOrder}" />
+              </StackPanel>
+
+              <!--<TextBlock Text="{Binding L[Dashboard_TargetPrice]}" Classes="label" />-->
+
+              <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Stretch" Margin="0,10,0,0">
+                  <StackPanel Orientation="Vertical" Spacing="6" MinWidth="70">
+                      <TextBlock Text="{Binding L[Dashboard_Margin]}" Classes="label" />
+                      <TextBlock Text="{Binding EstimatedMargin}" Foreground="#74D0C9" FontFamily="Consolas" />
+                  </StackPanel>
+                <StackPanel Orientation="Vertical" Spacing="6" MinWidth="70">
+                  <TextBlock Text="{Binding L[Dashboard_LiquidPrice]}" Classes="label" />
+                  <TextBlock Text="{Binding EstimatedLiquidationPrice}" Foreground="#74D0C9" FontFamily="Consolas" />
+                </StackPanel>
+                  <Button Content="{Binding L[Dashboard_SubmitOrder]}" VerticalAlignment="Center"
+                          Command="{Binding SubmitOrderCommand}"
+                          Classes="cta" />
+              </StackPanel>
+
+
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <Border Classes="card">
+          <Grid RowDefinitions="Auto,*" RowSpacing="8">
+            <TextBlock Text="{Binding L[Dashboard_PositionsTitle]}" FontWeight="Bold" Foreground="#E2F7FB" />
+            <dg:DataGrid Grid.Row="1"
+                         AutoGenerateColumns="False"
+                         ItemsSource="{Binding PositionRows}"
+                         CanUserSortColumns="True"
+                         MinHeight="150">
+              <dg:DataGrid.Columns>
+                <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Exchange]}" Binding="{Binding Exchange}" />
+                <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Main_Symbol]}" Binding="{Binding Symbol}" />
+                <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Mode]}" Binding="{Binding Mode}" />
+                <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Amount]}" Binding="{Binding Amount, StringFormat={}{0:N2}}" />
+                <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Entry]}" Binding="{Binding EntryPrice, StringFormat={}{0:N2}}" />
+                <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Price]}" Binding="{Binding Price, StringFormat={}{0:N2}}" />
+                <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Pnl]}" Binding="{Binding PnlDisplay}" />
+                <dg:DataGridTemplateColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Close]}">
+                  <dg:DataGridTemplateColumn.CellTemplate>
+                    <DataTemplate x:DataType="vm:DashboardPositionRow">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBox Width="90" Text="{Binding CloseLimitPrice}" />
+                        <Button Content="{Binding DataContext.L[OrderType_Limit], RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                Command="{Binding CloseLimitCommand}" />
+                        <Button Content="{Binding DataContext.L[OrderType_Market], RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                Command="{Binding CloseMarketCommand}"
+                                Classes="cta" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </dg:DataGridTemplateColumn.CellTemplate>
+                </dg:DataGridTemplateColumn>
+              </dg:DataGrid.Columns>
+            </dg:DataGrid>
+          </Grid>
+        </Border>
+
+        <Border Classes="card">
+          <Grid RowDefinitions="Auto,*" RowSpacing="8">
+            <TextBlock Text="{Binding L[Dashboard_OrdersTitle]}" FontWeight="Bold" Foreground="#E2F7FB" />
+            <dg:DataGrid Grid.Row="1"
+                         AutoGenerateColumns="False"
+                         ItemsSource="{Binding PendingOrderRows}"
+                         CanUserSortColumns="True"
+                         MinHeight="150">
+              <dg:DataGrid.Columns>
+                <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Exchange]}" Binding="{Binding Exchange}" />
+                <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Main_Symbol]}" Binding="{Binding Symbol}" />
+                <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Mode]}" Binding="{Binding Mode}" />
+                <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Amount]}" Binding="{Binding Amount, StringFormat={}{0:N2}}" />
+                <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Limit]}" Binding="{Binding LimitPrice, StringFormat={}{0:N2}}" />
+                <dg:DataGridTextColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Col_Price]}" Binding="{Binding Price, StringFormat={}{0:N2}}" />
+                <dg:DataGridTemplateColumn Header="{Binding #ViewRoot.DataContext.L[Dashboard_Cancel]}">
+                  <dg:DataGridTemplateColumn.CellTemplate>
+                    <DataTemplate x:DataType="vm:DashboardPendingOrderRow">
+                      <Button Content="{Binding DataContext.L[Dashboard_Cancel], RelativeSource={RelativeSource AncestorType=UserControl}}"
+                              Command="{Binding CancelCommand}" />
+                    </DataTemplate>
+                  </dg:DataGridTemplateColumn.CellTemplate>
+                </dg:DataGridTemplateColumn>
+              </dg:DataGrid.Columns>
+            </dg:DataGrid>
+          </Grid>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+
+    <Border IsVisible="{Binding IsOrderConfirmationVisible}"
+            Background="#A0000000">
+      <Border HorizontalAlignment="Center"
+              VerticalAlignment="Center"
+              Width="420"
+              MaxWidth="420"
+              Classes="card"
+              Padding="18">
+        <StackPanel Spacing="12">
+          <TextBlock Text="{Binding L[Dashboard_SubmitOrder]}"
+                     FontWeight="Bold"
+                     Foreground="#E2F7FB" />
+          <TextBlock Text="{Binding OrderConfirmationText}"
+                     TextWrapping="Wrap" />
+          <StackPanel Orientation="Horizontal"
+                      HorizontalAlignment="Right"
+                      Spacing="10">
+            <Button Content="{Binding L[Dashboard_Cancel]}"
+                    Command="{Binding CancelOrderConfirmationCommand}" />
+            <Button Content="{Binding L[Dashboard_Confirm]}"
+                    Command="{Binding ConfirmOrderCommand}"
+                    Classes="cta" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+    </Border>
+  </Grid>
+</UserControl>

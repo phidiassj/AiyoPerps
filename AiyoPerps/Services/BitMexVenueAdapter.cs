@@ -127,6 +127,16 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
         }
 
         var normalizedLeverage = Math.Max(1m, decimal.Round(leverage, 2, MidpointRounding.AwayFromZero));
+        var existingState = await TryGetExistingSymbolMarginStateAsync(normalizedSymbol, cancellationToken);
+        if (existingState is not null &&
+            existingState.HasExposureOrOrder &&
+            existingState.MarginMode == marginMode &&
+            IsSameLeverage(existingState.Leverage, normalizedLeverage))
+        {
+            _logger.Info("BitMEX", $"ConfigureLeverage skipped symbol={normalizedSymbol}, leverage={normalizedLeverage}, marginMode={marginMode.ToApiValue()}, reason=already-configured");
+            return (true, "BitMEX leverage configuration skipped");
+        }
+
         var path = marginMode == MarginMode.Isolated
             ? "/api/v1/position/leverage"
             : "/api/v1/position/crossLeverage";
@@ -147,7 +157,7 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
         if (!response.IsSuccessStatusCode)
         {
             _logger.Warn("BitMEX", $"ConfigureLeverage failed symbol={normalizedSymbol}, leverage={normalizedLeverage}, marginMode={marginMode.ToApiValue()}, status={(int)response.StatusCode}, body={Trim(body)}");
-            return (false, NormalizeBitMexMarginModeError(body, marginMode));
+            return (false, NormalizeBitMexMarginModeError(body, marginMode, (int)response.StatusCode));
         }
 
         _logger.Info("BitMEX", $"ConfigureLeverage applied symbol={normalizedSymbol}, leverage={normalizedLeverage}, marginMode={marginMode.ToApiValue()}");
@@ -1183,7 +1193,44 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
         return text.Length > 240 ? text[..240] : text;
     }
 
-    private static string NormalizeBitMexMarginModeError(string body, MarginMode marginMode)
+    private async Task<BitMexSymbolMarginState?> TryGetExistingSymbolMarginStateAsync(string normalizedSymbol, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var positions = await FetchPositionsAsync(0m, cancellationToken);
+            var matchedPosition = positions.FirstOrDefault(x => string.Equals(x.Symbol, normalizedSymbol, StringComparison.OrdinalIgnoreCase));
+            if (matchedPosition is not null)
+            {
+                return new BitMexSymbolMarginState(true, matchedPosition.MarginMode, matchedPosition.Leverage);
+            }
+
+            var openOrders = await FetchOpenOrdersAsync(cancellationToken);
+            var matchedOrder = openOrders.FirstOrDefault(x => string.Equals(x.Symbol, normalizedSymbol, StringComparison.OrdinalIgnoreCase));
+            if (matchedOrder is not null)
+            {
+                return new BitMexSymbolMarginState(true, matchedOrder.MarginMode, matchedOrder.Leverage);
+            }
+
+            return new BitMexSymbolMarginState(false, MarginMode.Unknown, 0m);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn("BitMEX", $"Margin state lookup warning symbol={normalizedSymbol}: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static bool IsSameLeverage(decimal current, decimal target)
+    {
+        if (current <= 0m || target <= 0m)
+        {
+            return false;
+        }
+
+        return Math.Abs(current - target) <= 0.01m;
+    }
+
+    private static string NormalizeBitMexMarginModeError(string body, MarginMode marginMode, int? statusCode = null)
     {
         var modeText = marginMode == MarginMode.Isolated ? "Isolated" : "Cross";
         var message = TryExtractBitMexErrorMessage(body) ?? Trim(body);
@@ -1195,6 +1242,18 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
         if (message.Contains("multi-asset", StringComparison.OrdinalIgnoreCase))
         {
             return "BitMEX Multi-Asset Margin accounts support Cross only. Switch the account out of Multi-Asset Margin before using Isolated.";
+        }
+
+        if (message.Contains("inconsistent strategy with position mode", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"BitMEX rejected switching to {modeText}: the account's current position mode is incompatible with this margin-mode change. Try the other mode for this symbol, or adjust the position mode in BitMEX first.";
+        }
+
+        if (statusCode is 401 or 403 ||
+            message.Contains("access denied", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("permission", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"BitMEX rejected switching to {modeText}: this API key or account does not have permission to change leverage / margin mode.";
         }
 
         if (message.Contains("position", StringComparison.OrdinalIgnoreCase) ||
@@ -1232,6 +1291,8 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
 
         return null;
     }
+
+    private sealed record BitMexSymbolMarginState(bool HasExposureOrOrder, MarginMode MarginMode, decimal Leverage);
 
     private void ParseMessage(string json)
     {

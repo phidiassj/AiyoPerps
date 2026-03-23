@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using AiyoPerps.Services;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -29,6 +30,7 @@ public sealed class LocalApiServer : IAsyncDisposable
     };
 
     private readonly TradingApiService _trading;
+    private readonly DashboardService _dashboard;
     private readonly ApiOperationStore _operations = new();
     private readonly AppLogger _logger;
     private readonly Func<string, Task>? _requestShutdown;
@@ -39,9 +41,10 @@ public sealed class LocalApiServer : IAsyncDisposable
     private IReadOnlyList<Ipv4Subnet> _allowedWslSubnets = [];
     private HashSet<string> _localIpv4Hosts = new(StringComparer.OrdinalIgnoreCase);
 
-    public LocalApiServer(TradingApiService trading, AppLogger logger, Func<string, Task>? requestShutdown = null)
+    public LocalApiServer(TradingApiService trading, DashboardService dashboard, AppLogger logger, Func<string, Task>? requestShutdown = null)
     {
         _trading = trading;
+        _dashboard = dashboard;
         _logger = logger;
         _requestShutdown = requestShutdown;
     }
@@ -233,6 +236,38 @@ public sealed class LocalApiServer : IAsyncDisposable
             bindScope = _startOptions.BindLocalOnlyLabel,
             allowedWslSubnets = _allowedWslSubnets.Select(x => x.DisplayText).ToArray()
         }));
+
+        app.MapGet("/api/v1/dashboard/status", () => Results.Ok(BuildDashboardStatusPayload()));
+
+        app.MapGet("/api/v1/dashboard/options", () => Results.Ok(BuildDashboardOptionsPayload()));
+
+        app.MapGet("/api/v1/dashboard/config", () => Results.Ok(_dashboard.GetConfiguration()));
+
+        app.MapPut("/api/v1/dashboard/config", async (ApiDashboardConfigurationRequest request, CancellationToken ct) =>
+        {
+            var snapshot = await _dashboard.UpdateConfigurationAsync(ToDashboardConfiguration(request), ct);
+            return Results.Ok(snapshot);
+        });
+
+        app.MapGet("/api/v1/dashboard/snapshot", () => Results.Ok(_dashboard.GetSnapshot()));
+
+        app.MapPost("/api/v1/dashboard/start", () =>
+            QueueOperation("dashboard-start", async ct => await _dashboard.StartAsync(ct)));
+
+        app.MapPost("/api/v1/dashboard/stop", () =>
+            QueueOperation("dashboard-stop", async ct => await _dashboard.StopAsync(ct)));
+
+        app.MapPost("/api/v1/dashboard/refresh", () =>
+            QueueOperation("dashboard-refresh", async ct => await _dashboard.RefreshAsync(ct)));
+
+        app.MapPost("/api/v1/dashboard/open-position", (ApiOpenPositionRequest request) =>
+            QueueOperation("dashboard-open-position", async ct => await _dashboard.OpenPositionAsync(request, ct)));
+
+        app.MapPost("/api/v1/dashboard/close-position", (ApiClosePositionRequest request) =>
+            QueueOperation("dashboard-close-position", async ct => await _dashboard.ClosePositionAsync(request, ct)));
+
+        app.MapPost("/api/v1/dashboard/cancel-order", (ApiCancelOrderRequest request) =>
+            QueueOperation("dashboard-cancel-order", async ct => await _dashboard.CancelOrderAsync(request, ct)));
 
         app.MapPost("/api/v1/app/shutdown", () =>
         {
@@ -548,41 +583,57 @@ public sealed class LocalApiServer : IAsyncDisposable
             "connections_open" => QueueMcpOperation("open-connection", async ct =>
             {
                 var req = Read<ApiConnectionOpenRequest>(args);
-                return await _trading.OpenConnectionAsync(req.AccountId, req.Symbol, req.Interval, ct);
+                return await _trading.OpenConnectionAsync(req.AccountId, req.Symbol, req.Interval, ct, notifyLifecycleEvents: false);
             }),
             "connections_close" => QueueMcpOperation("close-connection", async ct =>
             {
                 var req = Read<ApiConnectionCloseRequest>(args);
-                var closed = await _trading.CloseConnectionAsync(req.AccountId, req.Symbol);
+                var closed = await _trading.CloseConnectionAsync(req.AccountId, req.Symbol, ct, notifyLifecycleEvents: false);
                 return new { req.AccountId, req.Symbol, closed };
             }),
+            "dashboard_status_get" => BuildDashboardStatusPayload(),
+            "dashboard_options_get" => BuildDashboardOptionsPayload(),
+            "dashboard_config_get" => _dashboard.GetConfiguration(),
+            "dashboard_config_set" => await _dashboard.UpdateConfigurationAsync(ToDashboardConfiguration(Read<ApiDashboardConfigurationRequest>(args)), cancellationToken),
+            "dashboard_snapshot_get" => _dashboard.GetSnapshot(),
+            "dashboard_start" => QueueMcpOperation("dashboard-start", async ct => await _dashboard.StartAsync(ct)),
+            "dashboard_stop" => QueueMcpOperation("dashboard-stop", async ct => await _dashboard.StopAsync(ct)),
+            "dashboard_refresh" => QueueMcpOperation("dashboard-refresh", async ct => await _dashboard.RefreshAsync(ct)),
+            "dashboard_positions_open" => QueueMcpOperation("dashboard-open-position", async ct => await _dashboard.OpenPositionAsync(Read<ApiOpenPositionRequest>(args), ct)),
+            "dashboard_positions_close" => QueueMcpOperation("dashboard-close-position", async ct => await _dashboard.ClosePositionAsync(Read<ApiClosePositionRequest>(args), ct)),
+            "dashboard_orders_cancel" => QueueMcpOperation("dashboard-cancel-order", async ct => await _dashboard.CancelOrderAsync(Read<ApiCancelOrderRequest>(args), ct)),
             "market_snapshot" => await _trading.GetMarketDataAsync(
                 ReadGuid(args, "accountId"),
                 ReadString(args, "symbol"),
                 ReadString(args, "interval", "5m"),
                 ReadNullableLong(args, "cursor"),
-                cancellationToken),
+                cancellationToken,
+                notifyLifecycleEvents: false),
             "market_data_get" => await _trading.GetMarketDataAsync(
                 ReadGuid(args, "accountId"),
                 ReadString(args, "symbol"),
                 ReadString(args, "interval", "5m"),
                 ReadNullableLong(args, "cursor"),
-                cancellationToken),
+                cancellationToken,
+                notifyLifecycleEvents: false),
             "positions_list" => await _trading.ListPositionsAsync(
                 ReadGuid(args, "accountId"),
                 ReadOptionalString(args, "symbol"),
-                cancellationToken),
+                cancellationToken,
+                notifyLifecycleEvents: false),
             "orders_list" => await _trading.ListOpenOrdersAsync(
                 ReadGuid(args, "accountId"),
                 ReadOptionalString(args, "symbol"),
-                cancellationToken),
+                cancellationToken,
+                notifyLifecycleEvents: false),
             "balances_list" => await _trading.ListBalancesAsync(
                 ReadGuid(args, "accountId"),
                 ReadOptionalString(args, "symbol"),
-                cancellationToken),
-            "positions_open" => QueueMcpOperation("open-position", async ct => await _trading.OpenPositionAsync(Read<ApiOpenPositionRequest>(args), ct)),
-            "positions_close" => QueueMcpOperation("close-position", async ct => await _trading.ClosePositionAsync(Read<ApiClosePositionRequest>(args), ct)),
-            "orders_cancel" => QueueMcpOperation("cancel-order", async ct => await _trading.CancelOrderAsync(Read<ApiCancelOrderRequest>(args), ct)),
+                cancellationToken,
+                notifyLifecycleEvents: false),
+            "positions_open" => QueueMcpOperation("open-position", async ct => await _trading.OpenPositionAsync(Read<ApiOpenPositionRequest>(args), ct, notifyLifecycleEvents: false)),
+            "positions_close" => QueueMcpOperation("close-position", async ct => await _trading.ClosePositionAsync(Read<ApiClosePositionRequest>(args), ct, notifyLifecycleEvents: false)),
+            "orders_cancel" => QueueMcpOperation("cancel-order", async ct => await _trading.CancelOrderAsync(Read<ApiCancelOrderRequest>(args), ct, notifyLifecycleEvents: false)),
             "stress_run" => QueueMcpOperation("stress-run", async ct => await _trading.RunStressAsync(Read<ApiStressRunRequest>(args), ct)),
             "app_shutdown" => RequestShutdownFromTool(),
             "operations_get" => _operations.Get(ReadString(args, "operationId")) ?? throw new ApiNotFoundException("Operation not found."),
@@ -620,6 +671,44 @@ public sealed class LocalApiServer : IAsyncDisposable
             accepted = true,
             message = "Application shutdown requested."
         };
+    }
+
+    private object BuildDashboardStatusPayload()
+    {
+        var configuration = _dashboard.GetConfiguration();
+        var snapshot = _dashboard.GetSnapshot();
+        return new
+        {
+            isRunning = snapshot.IsRunning,
+            configuration,
+            updatedAt = snapshot.UpdatedAt,
+            counts = new
+            {
+                markets = snapshot.Markets.Count,
+                positions = snapshot.Positions.Count,
+                orders = snapshot.Orders.Count
+            }
+        };
+    }
+
+    private object BuildDashboardOptionsPayload()
+    {
+        var configuration = _dashboard.GetConfiguration();
+        return new
+        {
+            configuration,
+            accounts = _dashboard.GetSelectableAccounts(configuration.ShowTestnet),
+            symbols = _dashboard.GetAvailableSymbolOptions(configuration)
+        };
+    }
+
+    private static DashboardConfiguration ToDashboardConfiguration(ApiDashboardConfigurationRequest request)
+    {
+        return new DashboardConfiguration(
+            request.SelectedAccountIds ?? [],
+            request.Symbol,
+            request.Interval ?? "5m",
+            request.ShowTestnet);
     }
 
     private static object[] BuildMcpTools()
@@ -696,6 +785,58 @@ public sealed class LocalApiServer : IAsyncDisposable
                     ["symbol"] = StringSchema("Trading symbol, for example BTC.")
                 },
                 "accountId", "symbol")),
+            Tool("dashboard_status_get", "Get dashboard runtime status and counters.", ObjectSchema()),
+            Tool("dashboard_options_get", "Get dashboard-selectable accounts and symbols for the current configuration.", ObjectSchema()),
+            Tool("dashboard_config_get", "Get the current dashboard configuration.", ObjectSchema()),
+            Tool("dashboard_config_set", "Update the dashboard configuration.", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["selectedAccountIds"] = new Dictionary<string, object?>
+                    {
+                        ["type"] = "array",
+                        ["description"] = "Selected dashboard account ids.",
+                        ["items"] = StringSchema("Account identifier (GUID).", format: "uuid")
+                    },
+                    ["symbol"] = StringSchema("Dashboard symbol."),
+                    ["interval"] = StringSchema("Dashboard interval, defaults to 5m."),
+                    ["showTestnet"] = BooleanSchema("Whether dashboard options include testnet accounts.")
+                },
+                "selectedAccountIds", "interval", "showTestnet")),
+            Tool("dashboard_snapshot_get", "Get the latest dashboard snapshot.", ObjectSchema()),
+            Tool("dashboard_start", "Start the dashboard runtime with the current configuration.", ObjectSchema()),
+            Tool("dashboard_stop", "Stop the dashboard runtime and clear runtime data.", ObjectSchema()),
+            Tool("dashboard_refresh", "Refresh the dashboard snapshot immediately.", ObjectSchema()),
+            Tool("dashboard_positions_open", "Open a dashboard position on the selected account row (async order operation).", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["symbol"] = StringSchema("Trading symbol."),
+                    ["side"] = StringSchema("buy, sell, long, or short.", allowedValues: ["buy", "sell", "long", "short"]),
+                    ["orderType"] = StringSchema("market or limit.", allowedValues: ["market", "limit"]),
+                    ["leverage"] = NumberSchema("Requested leverage."),
+                    ["marginMode"] = StringSchema("cross or isolated.", allowedValues: ["cross", "isolated"]),
+                    ["amount"] = NumberSchema("Input amount."),
+                    ["amountUnit"] = StringSchema("Amount unit, for example USD."),
+                    ["limitPrice"] = NumberSchema("Required for limit orders.")
+                },
+                "accountId", "symbol", "side", "orderType", "leverage", "amount", "amountUnit")),
+            Tool("dashboard_positions_close", "Close a dashboard position by positionId (async order operation).", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["positionId"] = StringSchema("Position identifier."),
+                    ["orderType"] = StringSchema("market or limit.", allowedValues: ["market", "limit"]),
+                    ["limitPrice"] = NumberSchema("Required for limit orders.")
+                },
+                "accountId", "positionId", "orderType")),
+            Tool("dashboard_orders_cancel", "Cancel a dashboard order by orderId (async operation).", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
+                    ["symbol"] = StringSchema("Trading symbol."),
+                    ["orderId"] = StringSchema("Order identifier.")
+                },
+                "accountId", "symbol", "orderId")),
             Tool("market_snapshot", "Get initial snapshot or cursor-based candle delta.", ObjectSchema(
                 new Dictionary<string, object?>
                 {

@@ -14,6 +14,53 @@
 - 在 Windows 上，AiyoPerps 也會允許偵測到的 WSL vEthernet 子網段來源。
 - 非本機 host 或不合法的本機 `Origin` 會回 `403`。
 
+## 1.1 Agent Usage Guidance
+本節提供給會自行喚醒 AI agent 的 user 參考。AiyoPerps MCP 提供的是狀態讀取與交易操作通道，不內建交易策略，也不代替 user 決定 agent 應該只分析、提供建議，或直接執行。
+
+### 基本原則
+- AiyoPerps MCP 是即時交易狀態與執行結果的事實來源。
+- 外部研究、新聞、報告、Automations 產出的 `md` 檔，應由 agent 依 user 指示自行讀取，再回到 AiyoPerps MCP 驗證 live state。
+- agent 不應自行猜測 `accountId`、`symbol`、`positionId`、`orderId`；必須從 MCP 回傳取得。
+- user 若只要分析或建議，應在 prompt 明講不要執行交易。
+- user 若授權直接執行，agent 才應使用修改型 tools。
+
+### Dashboard MCP 常用 tools
+- `dashboard_status_get`：讀取 Dashboard runtime 狀態與資料筆數。
+- `dashboard_options_get`：讀取可選帳號與 symbol 選項。
+- `dashboard_config_get`：讀取目前 Dashboard 設定。
+- `dashboard_config_set`：更新目前 Dashboard 設定。
+- `dashboard_snapshot_get`：讀取最新 Dashboard snapshot，包含市場列、持倉列、掛單列。
+- `dashboard_start`：啟動 Dashboard runtime。
+- `dashboard_refresh`：立即刷新 Dashboard runtime。
+- `dashboard_stop`：停止 Dashboard runtime。
+- `dashboard_positions_open`：建立或增加某帳號列的曝險。
+- `dashboard_positions_close`：全平既有持倉。
+- `dashboard_orders_cancel`：取消既有掛單。
+
+### 其他常用唯讀 tools
+- `positions_list`：直接讀取某帳號的持倉。
+- `orders_list`：直接讀取某帳號的 open orders。
+- `balances_list`：直接讀取某帳號的餘額。
+- `market_snapshot`：讀取目前或增量 K 線快照。
+- `market_data_get`：讀取市場 K 線資料。
+- `operations_get`：讀取非同步操作進度與結果。
+
+### 建議操作流程
+1. 先讀取外部參考資料（如果 user prompt 有指定）。
+2. 呼叫 `dashboard_status_get` 檢查目前 runtime 狀態。
+3. 如果任務只需要單一帳號的持倉、掛單、餘額或市場資料，優先使用 direct read tools，這些 tools 不需要先 `dashboard_start`。
+4. 如果任務需要整合式 Dashboard snapshot，或需要依賴 Dashboard 已選帳號與 symbol 的上下文，才用 `dashboard_options_get` 與 `dashboard_config_set` 準備設定，再在 Dashboard 尚未就緒時呼叫 `dashboard_start`。
+5. 所有修改型 Dashboard tools 都必須再呼叫 `operations_get` 輪詢，直到狀態變成 `Succeeded` 或 `Failed`。
+6. 在 Dashboard runtime 有啟用時，呼叫 `dashboard_snapshot_get` 取得目前市場列、持倉、掛單。
+7. 視需要再用 `positions_list`、`orders_list`、`balances_list`、`market_snapshot` 做補充驗證。
+8. 若實際執行了下單、平倉或取消單，而且使用了 Dashboard runtime，完成後必須再 `dashboard_refresh`、再用 `operations_get` 等待，最後重新讀一次 `dashboard_snapshot_get` 驗證結果。
+
+### 操作限制
+- `dashboard_positions_open` 可用來增加曝險或用反向單抵銷部分曝險，但它不是明確的 reduce-only partial-close API。
+- `dashboard_positions_close` 是既有持倉的全平操作。
+- MCP tool 呼叫不應依賴開啟 adapter workspace tab；agent 透過 MCP 進行讀取或操作時，不會以建立 UI tab 作為前提。
+- 左區塊市場訊息已不再由 app 提供 MCP 快取；agent 若需要外部市場消息，必須自行讀取檔案或上網蒐集。
+
 ## 2. Headless 與 HTTP 啟動
 ### 桌面版
 在工具列開啟 `HTTP API`，並在啟用前設定埠號。
@@ -42,7 +89,77 @@ docker run --rm -p 5078:5078 phidiassj/aiyoperps:latest
 ### `POST /api/v1/app/shutdown`
 要求程式優雅關閉。
 
-## 3.2 帳號
+## 3.2 Dashboard
+Dashboard 相關端點用於驅動整合式 Dashboard runtime。
+
+### `GET /api/v1/dashboard/status`
+回傳 Dashboard runtime 狀態、目前設定，以及各區塊資料筆數。
+
+常見欄位：
+- `isRunning`
+- `configuration`
+- `updatedAt`
+- `counts.markets`
+- `counts.positions`
+- `counts.orders`
+
+### `GET /api/v1/dashboard/options`
+回傳目前 Dashboard 設定，以及可選帳號與 symbol 選項。
+
+常見欄位：
+- `configuration`
+- `accounts`
+- `symbols`
+
+### `GET /api/v1/dashboard/config`
+只回傳目前 Dashboard 設定。
+
+### `PUT /api/v1/dashboard/config`
+Body：`ApiDashboardConfigurationRequest`
+- `selectedAccountIds`（`uuid[]`，必填）：Dashboard 已選帳號 id
+- `symbol`（`string`，可選）：Dashboard 目前選定的 symbol key
+- `interval`（`string`，可選，預設 `5m`）
+- `showTestnet`（`boolean`，必填）
+
+回傳更新後的 Dashboard snapshot。
+
+### `GET /api/v1/dashboard/snapshot`
+回傳 UI 目前使用的最新 Dashboard snapshot。
+
+### `POST /api/v1/dashboard/start`
+將 Dashboard 啟動流程加入非同步作業佇列。
+
+### `POST /api/v1/dashboard/stop`
+將 Dashboard 停止流程加入非同步作業佇列，並清空 runtime 資料。
+
+### `POST /api/v1/dashboard/refresh`
+將 Dashboard 立即刷新流程加入非同步作業佇列。
+
+### `POST /api/v1/dashboard/open-position`
+Body：`ApiOpenPositionRequest`
+
+將 Dashboard 的下單操作加入非同步作業佇列。
+
+### `POST /api/v1/dashboard/close-position`
+Body：`ApiClosePositionRequest`
+
+將 Dashboard 的平倉操作加入非同步作業佇列。
+
+### `POST /api/v1/dashboard/cancel-order`
+Body：`ApiCancelOrderRequest`
+
+將 Dashboard 的取消訂單操作加入非同步作業佇列。
+
+### Dashboard 非同步行為
+以下 Dashboard REST 呼叫會回傳 `3.10` 所述的標準非同步 operation envelope：
+- `POST /api/v1/dashboard/start`
+- `POST /api/v1/dashboard/stop`
+- `POST /api/v1/dashboard/refresh`
+- `POST /api/v1/dashboard/open-position`
+- `POST /api/v1/dashboard/close-position`
+- `POST /api/v1/dashboard/cancel-order`
+
+## 3.3 帳號
 ### `GET /api/v1/accounts`
 列出所有已設定帳號。
 
@@ -76,12 +193,12 @@ Body：`ApiAccountUpsertRequest`
 ### `DELETE /api/v1/accounts/{accountId}`
 啟動非同步刪除作業。
 
-## 3.3 Symbols
+## 3.4 Symbols
 ### `GET /api/v1/accounts/{accountId}/symbols`
 ### `GET /api/v1/symbols?accountId=<GUID>`
 兩者都會回傳目標帳號可交易的商品清單。
 
-## 3.4 連線
+## 3.5 連線
 ### `GET /api/v1/connections`
 列出目前活動中的後端 session。
 
@@ -99,7 +216,7 @@ Body：`ApiConnectionCloseRequest`
 唯一性規則：每個 `accountId + symbol` 只會有一個後端 session。
 若 UI 與 API 同時開啟同一組連線，兩者會共用同一個後端連線。
 
-## 3.5 市場資料
+## 3.6 市場資料
 ### `GET /api/v1/market-data`
 Query 參數：
 - `accountId`（`uuid`，必填）
@@ -114,7 +231,7 @@ Query 參數：
 1. 第一次不帶 `cursor`：回傳 `initialCandles` 與新的 `cursor`。
 2. 後續帶入 `cursor`：只回傳增量 `deltaCandles` 與新的 `cursor`。
 
-## 3.6 帳戶狀態
+## 3.7 帳戶狀態
 ### `GET /api/v1/positions`
 Query 參數：
 - `accountId`（`uuid`，必填）
@@ -130,7 +247,7 @@ Query 參數：
 - `accountId`（`uuid`，必填）
 - `symbol`（`string`，可選）
 
-## 3.7 交易
+## 3.8 交易
 ### `POST /api/v1/trading/open-position`
 Body：`ApiOpenPositionRequest`
 - `accountId`（`uuid`，必填）
@@ -157,7 +274,7 @@ Body：`ApiCancelOrderRequest`
 
 交易所原始錯誤內容會保留在非同步 operation 的 `error` 中。
 
-## 3.8 壓測
+## 3.9 壓測
 ### `POST /api/v1/stress/run`
 Body：`ApiStressRunRequest`
 - `accountId`（`uuid`，必填）
@@ -166,7 +283,7 @@ Body：`ApiStressRunRequest`
 - `concurrency`（`integer`，可選，`1..64`，預設 `8`）
 - `iterations`（`integer`，可選，`1..20000`，預設 `200`）
 
-## 3.9 非同步作業
+## 3.10 非同步作業
 多數修改型呼叫會先回傳非同步 envelope。
 
 ### `GET /api/v1/operations/{operationId}`
@@ -215,6 +332,17 @@ Path 參數：
 - `connections_list`
 - `connections_open`
 - `connections_close`
+- `dashboard_status_get`
+- `dashboard_options_get`
+- `dashboard_config_get`
+- `dashboard_config_set`
+- `dashboard_snapshot_get`
+- `dashboard_start`
+- `dashboard_stop`
+- `dashboard_refresh`
+- `dashboard_positions_open`
+- `dashboard_positions_close`
+- `dashboard_orders_cancel`
 - `market_snapshot`
 - `market_data_get`
 - `positions_list`
@@ -243,6 +371,17 @@ Path 參數：
 - `connections_list`：無參數
 - `connections_open`：`accountId`、`symbol`、`interval`
 - `connections_close`：`accountId`、`symbol`
+- `dashboard_status_get`：無參數
+- `dashboard_options_get`：無參數
+- `dashboard_config_get`：無參數
+- `dashboard_config_set`：同 `ApiDashboardConfigurationRequest`
+- `dashboard_snapshot_get`：無參數
+- `dashboard_start`：無參數
+- `dashboard_stop`：無參數
+- `dashboard_refresh`：無參數
+- `dashboard_positions_open`：同 `ApiOpenPositionRequest`
+- `dashboard_positions_close`：同 `ApiClosePositionRequest`
+- `dashboard_orders_cancel`：同 `ApiCancelOrderRequest`
 - `market_snapshot`：`accountId`、`symbol`、可選 `interval`、可選 `cursor`
 - `market_data_get`：`accountId`、`symbol`、可選 `interval`、可選 `cursor`
 - `positions_list`：`accountId`、可選 `symbol`
@@ -254,6 +393,22 @@ Path 參數：
 - `stress_run`：同 `ApiStressRunRequest`
 - `operations_get`：`operationId`
 - `app_shutdown`：無參數
+
+### Dashboard MCP 行為
+以下 Dashboard MCP tools 會回傳標準非同步 operation envelope，而不是立即資料：
+- `dashboard_start`
+- `dashboard_stop`
+- `dashboard_refresh`
+- `dashboard_positions_open`
+- `dashboard_positions_close`
+- `dashboard_orders_cancel`
+
+以下 Dashboard MCP tools 會直接回傳資料：
+- `dashboard_status_get`
+- `dashboard_options_get`
+- `dashboard_config_get`
+- `dashboard_config_set`
+- `dashboard_snapshot_get`
 
 ## 4.3 Tool Schema 結構
 `tools/list` 目前會回傳完整 object schema，包含：

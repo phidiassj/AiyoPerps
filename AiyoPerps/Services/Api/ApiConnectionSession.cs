@@ -16,6 +16,8 @@ internal sealed class ApiConnectionSession : IAsyncDisposable
     private readonly object _sync = new();
     private readonly Dictionary<CandleInterval, IntervalState> _intervals = new();
     private readonly CancellationTokenSource _cts = new();
+    private readonly SortedDictionary<decimal, decimal> _liveOrderBookAsks = new();
+    private readonly SortedDictionary<decimal, decimal> _liveOrderBookBids = new(Comparer<decimal>.Create((left, right) => right.CompareTo(left)));
 
     private Task? _pumpTask;
     private bool _started;
@@ -201,6 +203,10 @@ internal sealed class ApiConnectionSession : IAsyncDisposable
             }
 
             _intervals[interval] = state;
+            if ((!LatestPrice.HasValue || LatestPrice.Value <= 0m) && state.Candles.Count > 0)
+            {
+                LatestPrice = state.Candles.Values.Last().Close;
+            }
         }
     }
 
@@ -210,22 +216,33 @@ internal sealed class ApiConnectionSession : IAsyncDisposable
         {
             await foreach (var marketEvent in _venue.MarketEvents(_cts.Token))
             {
-                if (marketEvent is not TradeTick tick)
+                if (marketEvent is TradeTick tick)
                 {
+                    LatestPrice = tick.Price;
+
+                    lock (_sync)
+                    {
+                        foreach (var kv in _intervals)
+                        {
+                            var state = kv.Value;
+                            var update = _aggregator.Aggregate(Account.VenueId, Symbol, state.Interval, tick, state.Current);
+                            state.Current = update.Candle;
+                            state.Upsert(update.Candle, fromHistorical: false);
+                        }
+                    }
+
                     continue;
                 }
 
-                LatestPrice = tick.Price;
-
-                lock (_sync)
+                if (marketEvent is OrderBookSnapshot snapshot)
                 {
-                    foreach (var kv in _intervals)
-                    {
-                        var state = kv.Value;
-                        var update = _aggregator.Aggregate(Account.VenueId, Symbol, state.Interval, tick, state.Current);
-                        state.Current = update.Candle;
-                        state.Upsert(update.Candle, fromHistorical: false);
-                    }
+                    ApplyOrderBookSnapshot(snapshot);
+                    continue;
+                }
+
+                if (marketEvent is OrderBookDelta delta)
+                {
+                    ApplyOrderBookDelta(delta);
                 }
             }
         }
@@ -274,6 +291,65 @@ internal sealed class ApiConnectionSession : IAsyncDisposable
         var twelveHours = 12 * 60;
         var count = (int)Math.Ceiling(twelveHours / (double)minutes) + 2;
         return Math.Max(8, count);
+    }
+
+    private void ApplyOrderBookSnapshot(OrderBookSnapshot snapshot)
+    {
+        lock (_sync)
+        {
+            _liveOrderBookAsks.Clear();
+            _liveOrderBookBids.Clear();
+            ApplyOrderBookSide(_liveOrderBookAsks, snapshot.Asks);
+            ApplyOrderBookSide(_liveOrderBookBids, snapshot.Bids);
+            UpdateLatestPriceFromOrderBookUnsafe();
+        }
+    }
+
+    private void ApplyOrderBookDelta(OrderBookDelta delta)
+    {
+        lock (_sync)
+        {
+            ApplyOrderBookSide(_liveOrderBookAsks, delta.Asks);
+            ApplyOrderBookSide(_liveOrderBookBids, delta.Bids);
+            UpdateLatestPriceFromOrderBookUnsafe();
+        }
+    }
+
+    private void UpdateLatestPriceFromOrderBookUnsafe()
+    {
+        if (_liveOrderBookAsks.Count == 0 || _liveOrderBookBids.Count == 0)
+        {
+            return;
+        }
+
+        var bestAsk = _liveOrderBookAsks.First().Key;
+        var bestBid = _liveOrderBookBids.First().Key;
+        if (bestAsk <= 0 || bestBid <= 0 || bestAsk <= bestBid)
+        {
+            return;
+        }
+
+        LatestPrice = (bestAsk + bestBid) / 2m;
+    }
+
+    private static void ApplyOrderBookSide(IDictionary<decimal, decimal> bookSide, IReadOnlyList<(decimal Price, decimal Size)> updates)
+    {
+        foreach (var (price, size) in updates)
+        {
+            if (price <= 0)
+            {
+                continue;
+            }
+
+            if (size <= 0)
+            {
+                bookSide.Remove(price);
+            }
+            else
+            {
+                bookSide[price] = size;
+            }
+        }
     }
 
     private sealed class IntervalState

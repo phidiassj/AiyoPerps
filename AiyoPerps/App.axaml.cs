@@ -28,11 +28,15 @@ public partial class App : Application
     public static IVenueFactory VenueFactory { get; } = new VenueFactory(Logger);
     public static CandleRepository CandleRepository { get; } = new();
     public static SymbolCatalogRepository SymbolCatalogRepository { get; } = new();
+    public static AIAgentRunRepository AIAgentRunRepository { get; } = new();
+    public static HttpApiStateService HttpApiStateService { get; } = new();
+    public static AIAgentExecutionService AIAgentExecutionService { get; } = new(UserPreferenceRepository, AIAgentRunRepository, HttpApiStateService, Logger);
     public static SymbolCatalogSyncService SymbolCatalogSyncService { get; } = new(SymbolCatalogRepository, Logger);
     public static WorkspaceLayoutRepository WorkspaceLayoutRepository { get; } = new();
     public static RetentionScheduler RetentionScheduler { get; } = new(new RetentionJob(), retentionDays: 365);
     public static TradingApiService TradingApiService { get; } = new(AccountStore, VenueFactory, SymbolCatalogRepository, Logger);
-    public static LocalApiServer LocalApiServer { get; } = new(TradingApiService, Logger, RequestShutdownAsync);
+    public static DashboardService DashboardService { get; } = new(AccountStore.Accounts, TradingApiService, SymbolCatalogRepository, Logger);
+    public static LocalApiServer LocalApiServer { get; } = new(TradingApiService, DashboardService, Logger, RequestShutdownAsync);
 
     public override void Initialize()
     {
@@ -41,7 +45,14 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        var httpApiEnabled = UserPreferenceRepository.GetHttpApiEnabledOrDefault(false);
+        if (httpApiEnabled)
+        {
+            HttpApiStateService.MarkInitializing(UserPreferenceRepository.GetHttpApiPortOrDefault(5078));
+        }
+
         RetentionScheduler.Start();
+        AIAgentExecutionService.Start();
         Logger.Info("App", "Application framework initialization started");
         var preferredLanguage = UserPreferenceRepository.GetLanguageCodeOrDefault("en");
         Localization.SetLanguage(preferredLanguage);
@@ -64,7 +75,7 @@ public partial class App : Application
         {
             desktop.MainWindow = new MainWindow
             {
-                DataContext = new MainWindowViewModel(AccountStore, VenueFactory, CandleRepository, SymbolCatalogRepository, Logger, ToastService, UserPreferenceRepository, LocalApiServer, TradingApiService)
+                DataContext = new MainWindowViewModel(AccountStore, VenueFactory, CandleRepository, SymbolCatalogRepository, Logger, ToastService, UserPreferenceRepository, LocalApiServer, TradingApiService, DashboardService, AIAgentExecutionService, HttpApiStateService)
             };
 
             desktop.Exit += (_, _) =>
@@ -107,7 +118,9 @@ public partial class App : Application
         {
             var apiDisposeTask = LocalApiServer.DisposeAsync().AsTask();
             var tradingDisposeTask = TradingApiService.DisposeAsync().AsTask();
-            var allDisposeTask = Task.WhenAll(apiDisposeTask, tradingDisposeTask);
+            var dashboardRuntimeDisposeTask = DashboardService.DisposeAsync().AsTask();
+            var aiAgentDisposeTask = AIAgentExecutionService.DisposeAsync().AsTask();
+            var allDisposeTask = Task.WhenAll(apiDisposeTask, tradingDisposeTask, dashboardRuntimeDisposeTask, aiAgentDisposeTask);
             var completedInTime = await Task.WhenAny(allDisposeTask, Task.Delay(TimeSpan.FromSeconds(5))) == allDisposeTask;
 
             if (completedInTime)

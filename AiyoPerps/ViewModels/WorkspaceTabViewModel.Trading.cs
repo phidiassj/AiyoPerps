@@ -68,7 +68,9 @@ public sealed partial class WorkspaceTabViewModel
                 .Where(x => !IsSuppressedCanceledOrderId(x.OrderId))
                 .Where(x => !IsFailedOrderStatus(x.Status))
                 .Select(x => new PendingOrderPanelRow(
+                    this,
                     x.Symbol,
+                    ResolveSymbolDisplayText(x.Symbol),
                     $"{NumberText.Trim(x.NotionalUsd, useGrouping: true)} USD",
                     FormatLeverageText(ResolvePendingOrderLeverage(x)),
                     FormatMarginModeText(x.MarginMode),
@@ -369,7 +371,7 @@ public sealed partial class WorkspaceTabViewModel
 
             if (!existingRows.TryGetValue(state.Symbol, out var row))
             {
-                row = new PositionPanelRow(state.Symbol, closePrice);
+                row = new PositionPanelRow(this, state.Symbol, ResolveSymbolDisplayText(state.Symbol), closePrice);
                 row.PropertyChanged += (_, args) =>
                 {
                     if (string.Equals(args.PropertyName, nameof(PositionPanelRow.ClosePrice), StringComparison.Ordinal))
@@ -440,7 +442,9 @@ public sealed partial class WorkspaceTabViewModel
             .Where(x => IsPendingOrderStatusForPanel(x.Status))
             .OrderByDescending(x => x.CreatedAt)
             .Select(x => new PendingOrderPanelRow(
+                this,
                 x.Symbol,
+                ResolveSymbolDisplayText(x.Symbol),
                 $"{NumberText.Trim(x.NotionalUsd, useGrouping: true)} USD",
                 FormatLeverageText(x.Leverage),
                 FormatMarginModeText(x.MarginMode),

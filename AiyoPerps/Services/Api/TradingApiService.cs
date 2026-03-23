@@ -18,6 +18,7 @@ public sealed class TradingApiService : IAsyncDisposable
     private readonly SymbolCatalogRepository _symbolCatalogRepository;
     private readonly AppLogger _logger;
     private readonly ConcurrentDictionary<string, ApiConnectionSession> _sessions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, int> _sessionReferences = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _sessionGate = new(1, 1);
     public event Action<ApiConnectionDto>? ConnectionOpened;
     public event Action<Guid, string>? ConnectionClosed;
@@ -139,7 +140,7 @@ public sealed class TradingApiService : IAsyncDisposable
             .Select(x => x.ToDto())
             .ToList();
 
-    public async Task<ApiConnectionDto> OpenConnectionAsync(Guid accountId, string symbol, string interval, CancellationToken cancellationToken = default)
+    public async Task<ApiConnectionDto> OpenConnectionAsync(Guid accountId, string symbol, string interval, CancellationToken cancellationToken = default, bool notifyLifecycleEvents = true)
     {
         var normalizedSymbol = NormalizeSymbol(symbol);
         var key = BuildSessionKey(accountId, normalizedSymbol);
@@ -150,6 +151,7 @@ public sealed class TradingApiService : IAsyncDisposable
             if (_sessions.TryGetValue(key, out var existing))
             {
                 await existing.EnsureIntervalLoadedAsync(ApiIntervalParser.ParseOrDefault(interval), cancellationToken);
+                _sessionReferences.AddOrUpdate(key, 1, static (_, current) => current + 1);
                 _logger.Info("Api", $"Connection reused key={key}");
                 return existing.ToDto();
             }
@@ -178,15 +180,19 @@ public sealed class TradingApiService : IAsyncDisposable
                 await session.StartAsync(cancellationToken);
                 await session.EnsureIntervalLoadedAsync(parsedInterval, cancellationToken);
                 _sessions[key] = session;
+                _sessionReferences[key] = 1;
                 _logger.Info("Api", $"Connection opened key={key}, connectionId={session.ConnectionId}");
                 var dto = session.ToDto();
-                try
+                if (notifyLifecycleEvents)
                 {
-                    ConnectionOpened?.Invoke(dto);
-                }
-                catch (Exception ex)
-                {
-                    _logger.Warn("Api", $"ConnectionOpened event warning key={key}: {ex.Message}");
+                    try
+                    {
+                        ConnectionOpened?.Invoke(dto);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Warn("Api", $"ConnectionOpened event warning key={key}: {ex.Message}");
+                    }
                 }
 
                 return dto;
@@ -203,32 +209,53 @@ public sealed class TradingApiService : IAsyncDisposable
         }
     }
 
-    public async Task<bool> CloseConnectionAsync(Guid accountId, string symbol)
+    public async Task<bool> CloseConnectionAsync(Guid accountId, string symbol, CancellationToken cancellationToken = default, bool notifyLifecycleEvents = true)
     {
         var normalizedSymbol = NormalizeSymbol(symbol);
         var key = BuildSessionKey(accountId, normalizedSymbol);
-        if (!_sessions.TryRemove(key, out var session))
-        {
-            return false;
-        }
-
-        await session.DisposeAsync();
-        _logger.Info("Api", $"Connection closed key={key}, connectionId={session.ConnectionId}");
+        await _sessionGate.WaitAsync(cancellationToken);
         try
         {
-            ConnectionClosed?.Invoke(accountId, normalizedSymbol);
-        }
-        catch (Exception ex)
-        {
-            _logger.Warn("Api", $"ConnectionClosed event warning key={key}: {ex.Message}");
-        }
+            if (!_sessions.TryGetValue(key, out var session))
+            {
+                return false;
+            }
 
-        return true;
+            var nextRefCount = _sessionReferences.AddOrUpdate(key, 0, static (_, current) => Math.Max(0, current - 1));
+            if (nextRefCount > 0)
+            {
+                _logger.Info("Api", $"Connection release key={key}, connectionId={session.ConnectionId}, remainingRefs={nextRefCount}");
+                return true;
+            }
+
+            _sessionReferences.TryRemove(key, out _);
+            _sessions.TryRemove(key, out _);
+
+            await session.DisposeAsync();
+            _logger.Info("Api", $"Connection closed key={key}, connectionId={session.ConnectionId}");
+            if (notifyLifecycleEvents)
+            {
+                try
+                {
+                    ConnectionClosed?.Invoke(accountId, normalizedSymbol);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warn("Api", $"ConnectionClosed event warning key={key}: {ex.Message}");
+                }
+            }
+
+            return true;
+        }
+        finally
+        {
+            _sessionGate.Release();
+        }
     }
 
-    public async Task<ApiMarketDataResponse> GetMarketDataAsync(Guid accountId, string symbol, string interval, long? cursor, CancellationToken cancellationToken = default)
+    public async Task<ApiMarketDataResponse> GetMarketDataAsync(Guid accountId, string symbol, string interval, long? cursor, CancellationToken cancellationToken = default, bool notifyLifecycleEvents = true)
     {
-        var session = await GetSessionAsync(accountId, symbol, cancellationToken);
+        var session = await GetSessionAsync(accountId, symbol, cancellationToken, notifyLifecycleEvents);
         var parsedInterval = ApiIntervalParser.ParseOrDefault(interval);
         await session.EnsureIntervalLoadedAsync(parsedInterval, cancellationToken);
 
@@ -244,9 +271,9 @@ public sealed class TradingApiService : IAsyncDisposable
             payload.HasDelta);
     }
 
-    public async Task<IReadOnlyList<ApiPositionDto>> ListPositionsAsync(Guid accountId, string? symbol, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ApiPositionDto>> ListPositionsAsync(Guid accountId, string? symbol, CancellationToken cancellationToken = default, bool notifyLifecycleEvents = true)
     {
-        var snapshot = await GetSnapshotAsync(accountId, symbol, AccountSnapshotSections.Positions, cancellationToken);
+        var snapshot = await GetSnapshotAsync(accountId, symbol, AccountSnapshotSections.Positions, cancellationToken, notifyLifecycleEvents);
         return snapshot.Positions.Select(p => new ApiPositionDto(
             p.Symbol,
             p.Symbol,
@@ -261,9 +288,9 @@ public sealed class TradingApiService : IAsyncDisposable
             p.MarginMode.ToApiValue())).ToList();
     }
 
-    public async Task<IReadOnlyList<ApiOpenOrderDto>> ListOpenOrdersAsync(Guid accountId, string? symbol, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ApiOpenOrderDto>> ListOpenOrdersAsync(Guid accountId, string? symbol, CancellationToken cancellationToken = default, bool notifyLifecycleEvents = true)
     {
-        var snapshot = await GetSnapshotAsync(accountId, symbol, AccountSnapshotSections.Orders, cancellationToken);
+        var snapshot = await GetSnapshotAsync(accountId, symbol, AccountSnapshotSections.Orders, cancellationToken, notifyLifecycleEvents);
         return snapshot.OpenOrders.Select(o => new ApiOpenOrderDto(
             o.Symbol,
             o.NotionalUsd,
@@ -274,15 +301,17 @@ public sealed class TradingApiService : IAsyncDisposable
             o.MarginMode.ToApiValue())).ToList();
     }
 
-    public async Task<IReadOnlyList<ApiBalanceDto>> ListBalancesAsync(Guid accountId, string? symbol, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ApiBalanceDto>> ListBalancesAsync(Guid accountId, string? symbol, CancellationToken cancellationToken = default, bool notifyLifecycleEvents = true)
     {
-        var snapshot = await GetSnapshotAsync(accountId, symbol, AccountSnapshotSections.Balances, cancellationToken);
-        return snapshot.Balances.Select(b => new ApiBalanceDto(b.Asset, b.Quantity, b.UsdValue)).ToList();
+        var snapshot = await GetSnapshotAsync(accountId, symbol, AccountSnapshotSections.Balances, cancellationToken, notifyLifecycleEvents);
+        return snapshot.Balances
+            .Select(b => new ApiBalanceDto(b.Asset, b.Quantity, b.UsdValue, b.AvailableQuantity, b.AvailableUsdValue))
+            .ToList();
     }
 
-    public async Task<object> OpenPositionAsync(ApiOpenPositionRequest request, CancellationToken cancellationToken = default)
+    public async Task<object> OpenPositionAsync(ApiOpenPositionRequest request, CancellationToken cancellationToken = default, bool notifyLifecycleEvents = true)
     {
-        var session = await GetSessionAsync(request.AccountId, request.Symbol, cancellationToken);
+        var session = await GetSessionAsync(request.AccountId, request.Symbol, cancellationToken, notifyLifecycleEvents);
         var side = ParseOrderSide(request.Side);
         var isLimit = IsLimitOrderType(request.OrderType);
 
@@ -348,9 +377,9 @@ public sealed class TradingApiService : IAsyncDisposable
         };
     }
 
-    public async Task<object> ClosePositionAsync(ApiClosePositionRequest request, CancellationToken cancellationToken = default)
+    public async Task<object> ClosePositionAsync(ApiClosePositionRequest request, CancellationToken cancellationToken = default, bool notifyLifecycleEvents = true)
     {
-        var snapshot = await GetSnapshotAsync(request.AccountId, request.PositionId, AccountSnapshotSections.Positions, cancellationToken);
+        var snapshot = await GetSnapshotAsync(request.AccountId, request.PositionId, AccountSnapshotSections.Positions, cancellationToken, notifyLifecycleEvents);
         var position = snapshot.Positions.FirstOrDefault(x =>
             string.Equals(x.Symbol, request.PositionId, StringComparison.OrdinalIgnoreCase));
 
@@ -359,7 +388,7 @@ public sealed class TradingApiService : IAsyncDisposable
             throw new ApiNotFoundException($"Position not found: {request.PositionId}");
         }
 
-        var session = await GetSessionAsync(request.AccountId, position.Symbol, cancellationToken);
+        var session = await GetSessionAsync(request.AccountId, position.Symbol, cancellationToken, notifyLifecycleEvents);
         var closeSide = position.Quantity < 0 ? "Buy" : "Sell";
         var qty = Math.Abs(position.Quantity);
 
@@ -395,9 +424,9 @@ public sealed class TradingApiService : IAsyncDisposable
         };
     }
 
-    public async Task<object> CancelOrderAsync(ApiCancelOrderRequest request, CancellationToken cancellationToken = default)
+    public async Task<object> CancelOrderAsync(ApiCancelOrderRequest request, CancellationToken cancellationToken = default, bool notifyLifecycleEvents = true)
     {
-        var session = await GetSessionAsync(request.AccountId, request.Symbol, cancellationToken);
+        var session = await GetSessionAsync(request.AccountId, request.Symbol, cancellationToken, notifyLifecycleEvents);
         var ack = await session.Venue.CancelOrderAsync(session.Symbol, request.OrderId, cancellationToken);
         if (!ack.Success)
         {
@@ -496,6 +525,7 @@ public sealed class TradingApiService : IAsyncDisposable
     {
         var sessions = _sessions.Values.ToList();
         _sessions.Clear();
+        _sessionReferences.Clear();
         foreach (var session in sessions)
         {
             try
@@ -511,9 +541,9 @@ public sealed class TradingApiService : IAsyncDisposable
         _sessionGate.Dispose();
     }
 
-    private async Task<VenueAccountSnapshot> GetSnapshotAsync(Guid accountId, string? symbol, AccountSnapshotSections sections, CancellationToken cancellationToken)
+    private async Task<VenueAccountSnapshot> GetSnapshotAsync(Guid accountId, string? symbol, AccountSnapshotSections sections, CancellationToken cancellationToken, bool notifyLifecycleEvents)
     {
-        var session = await GetSessionForSnapshotAsync(accountId, symbol, cancellationToken);
+        var session = await GetSessionForSnapshotAsync(accountId, symbol, cancellationToken, notifyLifecycleEvents);
         if (session.Venue is not IAccountStateProvider provider)
         {
             throw new ApiBadRequestException($"Venue does not expose account state: {session.Venue.VenueId}");
@@ -522,7 +552,7 @@ public sealed class TradingApiService : IAsyncDisposable
         return await provider.GetAccountSnapshotAsync(sections, cancellationToken);
     }
 
-    private async Task<ApiConnectionSession> GetSessionAsync(Guid accountId, string symbol, CancellationToken cancellationToken)
+    private async Task<ApiConnectionSession> GetSessionAsync(Guid accountId, string symbol, CancellationToken cancellationToken, bool notifyLifecycleEvents)
     {
         var normalizedSymbol = NormalizeSymbol(symbol);
         var key = BuildSessionKey(accountId, normalizedSymbol);
@@ -532,7 +562,7 @@ public sealed class TradingApiService : IAsyncDisposable
             return existing;
         }
 
-        await OpenConnectionAsync(accountId, normalizedSymbol, "5m", cancellationToken);
+        await OpenConnectionAsync(accountId, normalizedSymbol, "5m", cancellationToken, notifyLifecycleEvents);
         if (_sessions.TryGetValue(key, out var created))
         {
             return created;
@@ -541,11 +571,11 @@ public sealed class TradingApiService : IAsyncDisposable
         throw new ApiConflictException($"Connection is not available for account={accountId}, symbol={normalizedSymbol}");
     }
 
-    private async Task<ApiConnectionSession> GetSessionForSnapshotAsync(Guid accountId, string? symbol, CancellationToken cancellationToken)
+    private async Task<ApiConnectionSession> GetSessionForSnapshotAsync(Guid accountId, string? symbol, CancellationToken cancellationToken, bool notifyLifecycleEvents)
     {
         if (!string.IsNullOrWhiteSpace(symbol))
         {
-            return await GetSessionAsync(accountId, symbol, cancellationToken);
+            return await GetSessionAsync(accountId, symbol, cancellationToken, notifyLifecycleEvents);
         }
 
         var existing = _sessions.Values.FirstOrDefault(x => x.Account.AccountId == accountId);
@@ -562,7 +592,7 @@ public sealed class TradingApiService : IAsyncDisposable
             throw new ApiBadRequestException($"No symbol available for account {accountId}.");
         }
 
-        return await GetSessionAsync(accountId, fallbackSymbol, cancellationToken);
+        return await GetSessionAsync(accountId, fallbackSymbol, cancellationToken, notifyLifecycleEvents);
     }
 
     private static ApiAccountDto ToDto(AccountProfile account)

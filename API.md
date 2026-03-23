@@ -14,6 +14,53 @@ This document describes the current REST API, MCP endpoint, npm bridge, and host
 - On Windows, AiyoPerps also allows requests from the detected WSL vEthernet subnet.
 - Non-local hosts or invalid local origins are rejected with `403`.
 
+## 1.1 Agent Usage Guidance
+This section is intended for users who wake AI agents from the app. AiyoPerps MCP provides state inspection and execution pathways. It does not define trading strategy and does not decide whether an agent should only analyze, recommend actions, or execute trades.
+
+### Core principles
+- AiyoPerps MCP is the source of truth for live trading state and verified execution results.
+- External research, news, reports, and Automation-generated `md` files should be gathered or read by the agent as instructed by the user, then validated against live AiyoPerps MCP state.
+- The agent should never invent `accountId`, `symbol`, `positionId`, or `orderId`; it should read them from MCP results.
+- If the user wants analysis or recommendations only, the prompt should say so explicitly.
+- The agent should use mutating tools only when the user explicitly authorizes execution.
+
+### Common Dashboard MCP tools
+- `dashboard_status_get`: read dashboard runtime status and row counts.
+- `dashboard_options_get`: read selectable accounts and symbol options.
+- `dashboard_config_get`: read the current dashboard configuration.
+- `dashboard_config_set`: update the current dashboard configuration.
+- `dashboard_snapshot_get`: read the latest dashboard snapshot, including market rows, positions, and orders.
+- `dashboard_start`: start the dashboard runtime.
+- `dashboard_refresh`: refresh the dashboard runtime immediately.
+- `dashboard_stop`: stop the dashboard runtime.
+- `dashboard_positions_open`: create or add exposure on a dashboard account row.
+- `dashboard_positions_close`: fully close an existing position.
+- `dashboard_orders_cancel`: cancel an existing open order.
+
+### Other common read tools
+- `positions_list`: read active positions for one account directly.
+- `orders_list`: read exchange open orders for one account directly.
+- `balances_list`: read balances for one account directly.
+- `market_snapshot`: read current or incremental candle snapshots.
+- `market_data_get`: read market candle data.
+- `operations_get`: read async operation progress and results.
+
+### Recommended operating flow
+1. Read external reference files first when the user prompt explicitly points to them.
+2. Call `dashboard_status_get` to inspect the current runtime state.
+3. Use direct read tools first when the task only needs one account's positions, orders, balances, or market data. These tools do not require `dashboard_start`.
+4. If the task needs the integrated Dashboard snapshot or Dashboard-selected account/symbol context, use `dashboard_options_get` and `dashboard_config_set`, then call `dashboard_start` when the runtime is not ready.
+5. After every mutating Dashboard tool call, poll `operations_get` until the status is `Succeeded` or `Failed`.
+6. Call `dashboard_snapshot_get` to inspect current market rows, positions, and open orders when Dashboard runtime is in use.
+7. Use `positions_list`, `orders_list`, `balances_list`, and `market_snapshot` for extra verification when needed.
+8. After any actual trading action, call `dashboard_refresh`, wait again with `operations_get`, then read `dashboard_snapshot_get` again to verify the final state when Dashboard runtime is in use.
+
+### Operational limitations
+- `dashboard_positions_open` can be used to add exposure or offset part of an existing position, but it is not a dedicated reduce-only partial-close API.
+- `dashboard_positions_close` is the full-close operation for an existing position.
+- MCP tool calls are handled without opening adapter workspace tabs. Agent-driven reads and writes should not depend on UI tab creation.
+- The old dashboard market-news cache has been removed. If the agent needs external market context, it must read files or gather information from the web on its own.
+
 ## 2. Headless and HTTP Startup
 ### Desktop UI
 Enable `HTTP API` in the toolbar and choose the port before turning it on.
@@ -42,7 +89,77 @@ Typical response fields:
 ### `POST /api/v1/app/shutdown`
 Requests graceful application shutdown.
 
-## 3.2 Accounts
+## 3.2 Dashboard
+Dashboard endpoints drive the integrated Dashboard runtime.
+
+### `GET /api/v1/dashboard/status`
+Returns dashboard runtime state, current configuration, and row counts.
+
+Typical response fields:
+- `isRunning`
+- `configuration`
+- `updatedAt`
+- `counts.markets`
+- `counts.positions`
+- `counts.orders`
+
+### `GET /api/v1/dashboard/options`
+Returns the current dashboard configuration together with selectable account and symbol options.
+
+Typical response fields:
+- `configuration`
+- `accounts`
+- `symbols`
+
+### `GET /api/v1/dashboard/config`
+Returns the current dashboard configuration only.
+
+### `PUT /api/v1/dashboard/config`
+Body: `ApiDashboardConfigurationRequest`
+- `selectedAccountIds` (`uuid[]`, required): selected dashboard account ids
+- `symbol` (`string`, optional): selected dashboard symbol key
+- `interval` (`string`, optional, default `5m`)
+- `showTestnet` (`boolean`, required)
+
+Returns the updated dashboard snapshot.
+
+### `GET /api/v1/dashboard/snapshot`
+Returns the latest dashboard snapshot used by the UI.
+
+### `POST /api/v1/dashboard/start`
+Queues dashboard startup with the current configuration.
+
+### `POST /api/v1/dashboard/stop`
+Queues dashboard shutdown and clears runtime data.
+
+### `POST /api/v1/dashboard/refresh`
+Queues an immediate dashboard refresh.
+
+### `POST /api/v1/dashboard/open-position`
+Body: `ApiOpenPositionRequest`
+
+Queues a dashboard order-entry operation for the selected account row.
+
+### `POST /api/v1/dashboard/close-position`
+Body: `ApiClosePositionRequest`
+
+Queues a dashboard close-position operation.
+
+### `POST /api/v1/dashboard/cancel-order`
+Body: `ApiCancelOrderRequest`
+
+Queues a dashboard cancel-order operation.
+
+### Dashboard async behavior
+The following dashboard REST calls return the standard async operation envelope documented in `3.10`:
+- `POST /api/v1/dashboard/start`
+- `POST /api/v1/dashboard/stop`
+- `POST /api/v1/dashboard/refresh`
+- `POST /api/v1/dashboard/open-position`
+- `POST /api/v1/dashboard/close-position`
+- `POST /api/v1/dashboard/cancel-order`
+
+## 3.3 Accounts
 ### `GET /api/v1/accounts`
 List all configured accounts.
 
@@ -76,12 +193,12 @@ Body: `ApiAccountUpsertRequest`
 ### `DELETE /api/v1/accounts/{accountId}`
 Starts an async delete operation.
 
-## 3.3 Symbols
+## 3.4 Symbols
 ### `GET /api/v1/accounts/{accountId}/symbols`
 ### `GET /api/v1/symbols?accountId=<GUID>`
 Both return the tradable symbol catalog for the target account.
 
-## 3.4 Connections
+## 3.5 Connections
 ### `GET /api/v1/connections`
 List active backend sessions.
 
@@ -99,7 +216,7 @@ Body: `ApiConnectionCloseRequest`
 Uniqueness rule: one backend session per `accountId + symbol`.
 If the same session is opened by UI and API, they share one backend connection.
 
-## 3.5 Market Data
+## 3.6 Market Data
 ### `GET /api/v1/market-data`
 Query params:
 - `accountId` (`uuid`, required)
@@ -114,7 +231,7 @@ Same parameters and same cursor model as `/market-data`.
 1. First request without `cursor`: returns `initialCandles` and a new `cursor`.
 2. Later request with `cursor`: returns only incremental `deltaCandles` and a new `cursor`.
 
-## 3.6 Account State
+## 3.7 Account State
 ### `GET /api/v1/positions`
 Query params:
 - `accountId` (`uuid`, required)
@@ -130,7 +247,7 @@ Query params:
 - `accountId` (`uuid`, required)
 - `symbol` (`string`, optional)
 
-## 3.7 Trading
+## 3.8 Trading
 ### `POST /api/v1/trading/open-position`
 Body: `ApiOpenPositionRequest`
 - `accountId` (`uuid`, required)
@@ -157,7 +274,7 @@ Body: `ApiCancelOrderRequest`
 
 Exchange-side error payloads are preserved in the async operation result.
 
-## 3.8 Stress
+## 3.9 Stress
 ### `POST /api/v1/stress/run`
 Body: `ApiStressRunRequest`
 - `accountId` (`uuid`, required)
@@ -166,7 +283,7 @@ Body: `ApiStressRunRequest`
 - `concurrency` (`integer`, optional, `1..64`, default `8`)
 - `iterations` (`integer`, optional, `1..20000`, default `200`)
 
-## 3.9 Async Operations
+## 3.10 Async Operations
 Many mutating calls return an async envelope first.
 
 ### `GET /api/v1/operations/{operationId}`
@@ -215,6 +332,17 @@ Available tools:
 - `connections_list`
 - `connections_open`
 - `connections_close`
+- `dashboard_status_get`
+- `dashboard_options_get`
+- `dashboard_config_get`
+- `dashboard_config_set`
+- `dashboard_snapshot_get`
+- `dashboard_start`
+- `dashboard_stop`
+- `dashboard_refresh`
+- `dashboard_positions_open`
+- `dashboard_positions_close`
+- `dashboard_orders_cancel`
 - `market_snapshot`
 - `market_data_get`
 - `positions_list`
@@ -243,6 +371,17 @@ Backward compatibility: dotted names are normalized internally, but new clients 
 - `connections_list`: none
 - `connections_open`: `accountId`, `symbol`, `interval`
 - `connections_close`: `accountId`, `symbol`
+- `dashboard_status_get`: none
+- `dashboard_options_get`: none
+- `dashboard_config_get`: none
+- `dashboard_config_set`: same fields as `ApiDashboardConfigurationRequest`
+- `dashboard_snapshot_get`: none
+- `dashboard_start`: none
+- `dashboard_stop`: none
+- `dashboard_refresh`: none
+- `dashboard_positions_open`: same fields as `ApiOpenPositionRequest`
+- `dashboard_positions_close`: same fields as `ApiClosePositionRequest`
+- `dashboard_orders_cancel`: same fields as `ApiCancelOrderRequest`
 - `market_snapshot`: `accountId`, `symbol`, optional `interval`, optional `cursor`
 - `market_data_get`: `accountId`, `symbol`, optional `interval`, optional `cursor`
 - `positions_list`: `accountId`, optional `symbol`
@@ -254,6 +393,22 @@ Backward compatibility: dotted names are normalized internally, but new clients 
 - `stress_run`: same fields as `ApiStressRunRequest`
 - `operations_get`: `operationId`
 - `app_shutdown`: none
+
+### Dashboard MCP behavior
+These dashboard MCP tools return the standard async operation envelope instead of an immediate data payload:
+- `dashboard_start`
+- `dashboard_stop`
+- `dashboard_refresh`
+- `dashboard_positions_open`
+- `dashboard_positions_close`
+- `dashboard_orders_cancel`
+
+These dashboard MCP tools return data directly:
+- `dashboard_status_get`
+- `dashboard_options_get`
+- `dashboard_config_get`
+- `dashboard_config_set`
+- `dashboard_snapshot_get`
 
 ## 4.3 Tool Schema Shape
 `tools/list` returns full object schemas with:

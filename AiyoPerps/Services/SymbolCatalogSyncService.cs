@@ -61,7 +61,7 @@ public sealed class SymbolCatalogSyncService
                 return;
             }
 
-            var symbols = new List<string>();
+            var symbols = new List<SymbolCatalogUpsert>();
             var skippedNoPrice = 0;
             var skippedQuote = 0;
             var skippedState = 0;
@@ -102,7 +102,13 @@ public sealed class SymbolCatalogSyncService
                     continue;
                 }
 
-                symbols.Add(symbol);
+                symbols.Add(SymbolCatalogUpsert.FromVenueSymbol(
+                    "BitMEX",
+                    symbol,
+                    baseAsset: ReadString(item, "rootSymbol") ?? ReadString(item, "underlying"),
+                    quoteAsset: quote,
+                    settleAsset: ReadString(item, "settlCurrency") ?? ReadString(item, "settleCurrency"),
+                    contractType: "PERP"));
             }
 
             var result = _repository.ReplaceSymbols("BitMEX", environment, symbols);
@@ -145,7 +151,7 @@ public sealed class SymbolCatalogSyncService
             }
 
             var mids = await FetchHyperliquidMidsAsync(baseUrl, cancellationToken);
-            var symbols = new List<string>();
+            var symbols = new List<SymbolCatalogUpsert>();
             var skippedNoMid = 0;
             var skippedInvalid = 0;
             foreach (var item in universe.EnumerateArray())
@@ -168,7 +174,13 @@ public sealed class SymbolCatalogSyncService
                     continue;
                 }
 
-                symbols.Add(symbol);
+                symbols.Add(SymbolCatalogUpsert.FromVenueSymbol(
+                    "Hyperliquid",
+                    symbol,
+                    baseAsset: symbol,
+                    quoteAsset: "USDC",
+                    settleAsset: "USDC",
+                    contractType: "PERP"));
             }
 
             var result = _repository.ReplaceSymbols("Hyperliquid", environment, symbols);
@@ -205,7 +217,7 @@ public sealed class SymbolCatalogSyncService
                 return;
             }
 
-            var symbols = new List<string>();
+            var symbols = new List<SymbolCatalogUpsert>();
             var skippedStatus = 0;
             var skippedType = 0;
             var skippedInvalid = 0;
@@ -233,7 +245,13 @@ public sealed class SymbolCatalogSyncService
                     continue;
                 }
 
-                symbols.Add(symbol);
+                symbols.Add(SymbolCatalogUpsert.FromVenueSymbol(
+                    "Aster",
+                    symbol,
+                    baseAsset: ReadString(item, "baseAsset"),
+                    quoteAsset: ReadString(item, "quoteAsset"),
+                    settleAsset: ReadString(item, "marginAsset"),
+                    contractType: contractType));
             }
 
             var result = _repository.ReplaceSymbols("Aster", environment, symbols);
@@ -294,7 +312,7 @@ public sealed class SymbolCatalogSyncService
                 return;
             }
 
-            var symbols = new List<string>();
+            var symbols = new List<SymbolCatalogUpsert>();
             var skippedInvalid = 0;
             var skippedInactive = 0;
             foreach (var item in list.EnumerateArray())
@@ -315,10 +333,19 @@ public sealed class SymbolCatalogSyncService
                     continue;
                 }
 
-                symbols.Add(symbol);
+                symbols.Add(SymbolCatalogUpsert.FromVenueSymbol(
+                    "GRVT",
+                    symbol,
+                    baseAsset: ReadString(item, "base_asset") ?? ReadString(item, "baseAsset") ?? ReadString(item, "underlying_asset") ?? ReadString(item, "underlyingAsset"),
+                    quoteAsset: ReadString(item, "quote_asset") ?? ReadString(item, "quoteAsset"),
+                    settleAsset: ReadString(item, "settle_asset") ?? ReadString(item, "settleAsset"),
+                    contractType: ReadString(item, "contract_type") ?? ReadString(item, "contractType") ?? ReadString(item, "instrument_type") ?? ReadString(item, "instrumentType") ?? "PERP"));
             }
 
-            var unique = symbols.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var unique = symbols
+                .GroupBy(x => x.RawSymbol, StringComparer.OrdinalIgnoreCase)
+                .Select(x => x.First())
+                .ToList();
             var replace = _repository.ReplaceSymbols("GRVT", environment, unique);
             _logger.Info("SymbolSync", $"GRVT sync done env={environment}, total={replace.Total}, added={replace.Added}, removed={replace.Removed}, skippedInvalid={skippedInvalid}, skippedInactive={skippedInactive}");
         }
@@ -353,7 +380,7 @@ public sealed class SymbolCatalogSyncService
                 return;
             }
 
-            var symbols = new List<string>();
+            var symbols = new List<SymbolCatalogUpsert>();
             var skippedInactive = 0;
             var skippedIsolated = 0;
             var skippedInvalid = 0;
@@ -381,7 +408,10 @@ public sealed class SymbolCatalogSyncService
                     continue;
                 }
 
-                symbols.Add(ticker);
+                symbols.Add(SymbolCatalogUpsert.FromVenueSymbol(
+                    "dYdX",
+                    ticker,
+                    contractType: "PERP"));
             }
 
             var result = _repository.ReplaceSymbols("dYdX", environment, symbols);

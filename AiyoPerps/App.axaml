@@ -5,6 +5,7 @@
 
     <Application.Styles>
         <FluentTheme />
+        <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
         <Style Selector="Window">
             <Setter Property="Background">
                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">

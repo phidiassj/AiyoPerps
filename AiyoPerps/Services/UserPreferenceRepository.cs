@@ -2,6 +2,7 @@ using AiyoPerps.Data;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Linq;
+using System.Text.Json;
 
 namespace AiyoPerps.Services;
 
@@ -13,6 +14,7 @@ public sealed class UserPreferenceRepository
     private const string OrderQuantityKey = "order.quantity";
     private const string HttpApiPortKey = "http_api.port";
     private const string HttpApiEnabledKey = "http_api.enabled";
+    private const string AIAgentSettingsKey = "ai_agent.settings";
 
     public string GetLanguageCodeOrDefault(string defaultLanguageCode = "en")
     {
@@ -104,6 +106,30 @@ public sealed class UserPreferenceRepository
     public void SaveHttpApiEnabled(bool enabled)
     {
         SavePreference(HttpApiEnabledKey, enabled ? "1" : "0");
+    }
+
+    public AIAgentSettings GetAIAgentSettingsOrDefault()
+    {
+        var json = GetPreferenceOrDefault(AIAgentSettingsKey, string.Empty);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return AIAgentSettings.Default;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<AIAgentSettings>(json) ?? AIAgentSettings.Default;
+        }
+        catch
+        {
+            return AIAgentSettings.Default;
+        }
+    }
+
+    public void SaveAIAgentSettings(AIAgentSettings settings)
+    {
+        var json = JsonSerializer.Serialize(settings);
+        SavePreference(AIAgentSettingsKey, json);
     }
 
     private static string GetPreferenceOrDefault(string key, string defaultValue)

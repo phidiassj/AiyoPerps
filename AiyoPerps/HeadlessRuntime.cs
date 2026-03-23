@@ -44,8 +44,10 @@ internal static class HeadlessRuntime
         var retentionScheduler = new RetentionScheduler(new RetentionJob(), retentionDays: 365);
         var symbolCatalogSyncService = new SymbolCatalogSyncService(symbolCatalogRepository, logger);
         var tradingApiService = new TradingApiService(accountStore, venueFactory, symbolCatalogRepository, logger);
+        var dashboardService = new DashboardService(accountStore.Accounts, tradingApiService, symbolCatalogRepository, logger);
         var localApiServer = new LocalApiServer(
             tradingApiService,
+            dashboardService,
             logger,
             reason =>
             {
@@ -86,7 +88,7 @@ internal static class HeadlessRuntime
         finally
         {
             shutdownCts.Cancel();
-            await DisposeWithTimeoutAsync(localApiServer, tradingApiService, retentionScheduler, logger);
+            await DisposeWithTimeoutAsync(localApiServer, tradingApiService, dashboardService, retentionScheduler, logger);
         }
     }
 
@@ -150,6 +152,7 @@ internal static class HeadlessRuntime
     private static async Task DisposeWithTimeoutAsync(
         LocalApiServer localApiServer,
         TradingApiService tradingApiService,
+        DashboardService dashboardService,
         RetentionScheduler retentionScheduler,
         AppLogger logger)
     {
@@ -157,7 +160,8 @@ internal static class HeadlessRuntime
         {
             var apiDisposeTask = localApiServer.DisposeAsync().AsTask();
             var tradingDisposeTask = tradingApiService.DisposeAsync().AsTask();
-            var allDisposeTask = Task.WhenAll(apiDisposeTask, tradingDisposeTask);
+            var dashboardRuntimeDisposeTask = dashboardService.DisposeAsync().AsTask();
+            var allDisposeTask = Task.WhenAll(apiDisposeTask, tradingDisposeTask, dashboardRuntimeDisposeTask);
             var completed = await Task.WhenAny(allDisposeTask, Task.Delay(TimeSpan.FromSeconds(5))) == allDisposeTask;
             retentionScheduler.Dispose();
 

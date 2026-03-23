@@ -51,6 +51,11 @@ public sealed record ApiAccountUpsertRequest(
 
 public sealed record ApiConnectionOpenRequest(Guid AccountId, string Symbol, string Interval);
 public sealed record ApiConnectionCloseRequest(Guid AccountId, string Symbol);
+public sealed record ApiDashboardConfigurationRequest(
+    IReadOnlyList<Guid> SelectedAccountIds,
+    string? Symbol,
+    string? Interval,
+    bool ShowTestnet);
 
 public sealed record ApiConnectionDto(
     string ConnectionId,
@@ -125,7 +130,12 @@ public sealed record ApiOpenOrderDto(
     string? OrderId,
     string MarginMode = "unknown");
 
-public sealed record ApiBalanceDto(string Asset, decimal Quantity, decimal UsdValue);
+public sealed record ApiBalanceDto(
+    string Asset,
+    decimal Quantity,
+    decimal UsdValue,
+    decimal? AvailableQuantity,
+    decimal? AvailableUsdValue);
 
 public sealed record ApiStressRunRequest(
     Guid AccountId,
