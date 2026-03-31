@@ -45,9 +45,13 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
     private Task? _wsTask;
     private string _coin = "BTC";
     private Dictionary<string, int>? _assetByCoin;
+    private Dictionary<string, string?>? _dexByCoin;
     private Dictionary<string, int>? _sizeDecimalsByCoin;
+    private IReadOnlyList<string?> _knownPerpDexes = [null];
     private IReadOnlyDictionary<string, decimal> _allMidsCache = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset _allMidsCacheAt = DateTimeOffset.MinValue;
+    private IReadOnlyList<VenuePosition> _positionsCache = [];
+    private IReadOnlyList<VenueOpenOrder> _openOrdersCache = [];
     private IReadOnlyList<VenueBalance> _balancesCache = [];
     private string? _balancesCacheInfoAddress;
     private DateTimeOffset _balancesCacheAt = DateTimeOffset.MinValue;
@@ -680,6 +684,12 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         {
             stopwatch.Stop();
             _logger.Error("Hyperliquid", "GetAccountSnapshot failed to fetch positions", ex);
+            if (_positionsCache.Count > 0)
+            {
+                _logger.Warn("Hyperliquid", "GetAccountSnapshot using stale positions cache");
+                return (_positionsCache, stopwatch.ElapsedMilliseconds);
+            }
+
             return ([], stopwatch.ElapsedMilliseconds);
         }
     }
@@ -699,6 +709,12 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         {
             stopwatch.Stop();
             _logger.Error("Hyperliquid", "GetAccountSnapshot failed to fetch open orders", ex);
+            if (_openOrdersCache.Count > 0)
+            {
+                _logger.Warn("Hyperliquid", "GetAccountSnapshot using stale open-orders cache");
+                return (_openOrdersCache, stopwatch.ElapsedMilliseconds);
+            }
+
             return ([], stopwatch.ElapsedMilliseconds);
         }
     }
@@ -800,147 +816,160 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
     private async Task<IReadOnlyList<VenuePosition>> FetchPositionsAsync(string infoAddress, IReadOnlyDictionary<string, decimal> mids, CancellationToken cancellationToken)
     {
         var totalStopwatch = Stopwatch.StartNew();
-        var httpStopwatch = Stopwatch.StartNew();
-        var payload = JsonSerializer.Serialize(new { type = "clearinghouseState", user = infoAddress });
-        using var req = new HttpRequestMessage(HttpMethod.Post, _restBase + "/info")
-        {
-            Content = new StringContent(payload, Encoding.UTF8, "application/json")
-        };
-
-        using var resp = await _httpClient.SendAsync(req, cancellationToken);
-        var body = await resp.Content.ReadAsStringAsync(cancellationToken);
-        httpStopwatch.Stop();
-        if (!resp.IsSuccessStatusCode)
-        {
-            throw new InvalidOperationException($"clearinghouseState failed {(int)resp.StatusCode}: {Trim(body)}");
-        }
-
         var parseStopwatch = Stopwatch.StartNew();
-        using var doc = JsonDocument.Parse(body);
-        if (!doc.RootElement.TryGetProperty("assetPositions", out var positionsElement) ||
-            positionsElement.ValueKind != JsonValueKind.Array)
-        {
-            _logger.Warn("Hyperliquid", "FetchPositions assetPositions missing or not array");
-            return [];
-        }
-
+        var httpElapsedMs = 0L;
+        var dexes = await GetKnownPerpDexesAsync(cancellationToken);
         var result = new List<VenuePosition>();
         var totalRows = 0;
         var parsedRows = 0;
         var skippedNoSymbol = 0;
         var skippedZeroQty = 0;
         var skippedMalformed = 0;
+        var rateLimited = false;
         var firstRaw = string.Empty;
         var firstMalformed = string.Empty;
-        foreach (var item in positionsElement.EnumerateArray())
+        foreach (var dex in dexes)
         {
-            try
+            using var req = CreateInfoRequest(_restBase, "clearinghouseState", user: infoAddress, dex: dex);
+            var httpStopwatch = Stopwatch.StartNew();
+            using var resp = await _httpClient.SendAsync(req, cancellationToken);
+            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+            httpStopwatch.Stop();
+            httpElapsedMs += httpStopwatch.ElapsedMilliseconds;
+
+            if (!resp.IsSuccessStatusCode)
             {
-                totalRows++;
-                if (string.IsNullOrWhiteSpace(firstRaw))
+                if ((int)resp.StatusCode == 429)
                 {
-                    firstRaw = Trim(item.ToString());
+                    rateLimited = true;
                 }
 
-                JsonElement p;
-                if (item.TryGetProperty("position", out var posObj) && posObj.ValueKind == JsonValueKind.Object)
+                if (string.IsNullOrWhiteSpace(dex))
                 {
-                    p = posObj;
-                }
-                else if (item.ValueKind == JsonValueKind.Object)
-                {
-                    p = item;
-                }
-                else
-                {
-                    continue;
+                    throw new InvalidOperationException($"clearinghouseState failed {(int)resp.StatusCode}: {Trim(body)}");
                 }
 
-                var coin = ReadFirstString(p, "coin", "symbol", "name");
-                if (string.IsNullOrWhiteSpace(coin))
-                {
-                    skippedNoSymbol++;
-                    continue;
-                }
-
-                var quantity = ReadFirstDecimal(p, "szi", "size", "sz", "positionSize", "qty", "positionQty");
-                if (quantity == 0)
-                {
-                    skippedZeroQty++;
-                    continue;
-                }
-
-                var symbol = coin.ToUpperInvariant();
-                var entryPx = ReadFirstDecimal(p, "entryPx", "entryPrice", "avgEntryPrice");
-                var markPx = mids.TryGetValue(symbol, out var mid) ? mid : ReadFirstDecimal(p, "markPx", "markPrice");
-                if (markPx <= 0)
-                {
-                    markPx = entryPx;
-                }
-
-                var notional = Math.Abs(ReadFirstDecimal(p, "positionValue", "notionalUsd", "notional", "value"));
-                if (notional <= 0 && markPx > 0)
-                {
-                    notional = Math.Abs(quantity * markPx);
-                }
-
-                var leverage = ReadDecimal(p, "leverage");
-                if (leverage <= 0 && p.TryGetProperty("leverage", out var levObj) && levObj.ValueKind == JsonValueKind.Object)
-                {
-                    leverage = ReadFirstDecimal(levObj, "value", "leverage");
-                }
-                if (leverage <= 0)
-                {
-                    var marginUsed = Math.Abs(ReadFirstDecimal(p, "marginUsed", "initialMargin", "margin"));
-                    if (marginUsed > 0 && notional > 0)
-                    {
-                        leverage = notional / marginUsed;
-                    }
-                }
-
-                var unrealizedPnlUsd = ReadFirstDecimal(p, "unrealizedPnl", "upl", "funding", "cumFunding");
-                if (unrealizedPnlUsd == 0m)
-                {
-                    unrealizedPnlUsd = ReadDecimal(p, "funding");
-                }
-                if (unrealizedPnlUsd == 0m)
-                {
-                    unrealizedPnlUsd = ReadDecimal(p, "cumFunding");
-                }
-                var unrealizedPct = 0m;
-                if (notional > 0 && unrealizedPnlUsd != 0)
-                {
-                    unrealizedPct = (unrealizedPnlUsd / notional) * 100m;
-                }
-                else
-                {
-                    unrealizedPct = ComputeDirectionalPct(quantity, entryPx, markPx);
-                }
-
-                var realizedPnlUsd = ReadFirstDecimal(p, "cumRealizedPnl", "realizedPnl");
-
-                result.Add(new VenuePosition(
-                    symbol,
-                    quantity,
-                    notional,
-                    leverage,
-                    entryPx,
-                    markPx,
-                    unrealizedPct,
-                    unrealizedPnlUsd,
-                    realizedPnlUsd,
-                    ParseMarginModeFromLeverageObject(p)));
-                parsedRows++;
+                _logger.Warn("Hyperliquid", $"FetchPositions skip dex={dex} status={(int)resp.StatusCode}, body={Trim(body)}");
+                continue;
             }
-            catch (Exception ex)
-            {
-                skippedMalformed++;
-                if (string.IsNullOrWhiteSpace(firstMalformed))
-                {
-                    firstMalformed = $"row={Trim(item.ToString())}; error={ex.Message}";
-                }
 
-                _logger.Warn("Hyperliquid", $"FetchPositions skip malformed row: {ex.Message}");
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("assetPositions", out var positionsElement) ||
+                positionsElement.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var item in positionsElement.EnumerateArray())
+            {
+                try
+                {
+                    totalRows++;
+                    if (string.IsNullOrWhiteSpace(firstRaw))
+                    {
+                        firstRaw = Trim(item.ToString());
+                    }
+
+                    JsonElement p;
+                    if (item.TryGetProperty("position", out var posObj) && posObj.ValueKind == JsonValueKind.Object)
+                    {
+                        p = posObj;
+                    }
+                    else if (item.ValueKind == JsonValueKind.Object)
+                    {
+                        p = item;
+                    }
+                    else
+                    {
+                        continue;
+                    }
+
+                    var coin = ReadFirstString(p, "coin", "symbol", "name");
+                    if (string.IsNullOrWhiteSpace(coin))
+                    {
+                        skippedNoSymbol++;
+                        continue;
+                    }
+
+                    var quantity = ReadFirstDecimal(p, "szi", "size", "sz", "positionSize", "qty", "positionQty");
+                    if (quantity == 0)
+                    {
+                        skippedZeroQty++;
+                        continue;
+                    }
+
+                    var symbol = NormalizeCoin(coin);
+                    var entryPx = ReadFirstDecimal(p, "entryPx", "entryPrice", "avgEntryPrice");
+                    var markPx = mids.TryGetValue(symbol, out var mid) ? mid : ReadFirstDecimal(p, "markPx", "markPrice");
+                    if (markPx <= 0)
+                    {
+                        markPx = entryPx;
+                    }
+
+                    var notional = Math.Abs(ReadFirstDecimal(p, "positionValue", "notionalUsd", "notional", "value"));
+                    if (notional <= 0 && markPx > 0)
+                    {
+                        notional = Math.Abs(quantity * markPx);
+                    }
+
+                    var leverage = ReadDecimal(p, "leverage");
+                    if (leverage <= 0 && p.TryGetProperty("leverage", out var levObj) && levObj.ValueKind == JsonValueKind.Object)
+                    {
+                        leverage = ReadFirstDecimal(levObj, "value", "leverage");
+                    }
+
+                    if (leverage <= 0)
+                    {
+                        var marginUsed = Math.Abs(ReadFirstDecimal(p, "marginUsed", "initialMargin", "margin"));
+                        if (marginUsed > 0 && notional > 0)
+                        {
+                            leverage = notional / marginUsed;
+                        }
+                    }
+
+                    var unrealizedPnlUsd = ReadFirstDecimal(p, "unrealizedPnl", "upl", "funding", "cumFunding");
+                    if (unrealizedPnlUsd == 0m)
+                    {
+                        unrealizedPnlUsd = ReadDecimal(p, "funding");
+                    }
+
+                    if (unrealizedPnlUsd == 0m)
+                    {
+                        unrealizedPnlUsd = ReadDecimal(p, "cumFunding");
+                    }
+
+                    var unrealizedPct = PositionPnlMath.ComputeUnrealizedPnlPctOrDirectional(
+                        notional,
+                        unrealizedPnlUsd,
+                        quantity,
+                        entryPx,
+                        markPx);
+
+                    var realizedPnlUsd = ReadFirstDecimal(p, "cumRealizedPnl", "realizedPnl");
+
+                    result.Add(new VenuePosition(
+                        symbol,
+                        quantity,
+                        notional,
+                        leverage,
+                        entryPx,
+                        markPx,
+                        unrealizedPct,
+                        unrealizedPnlUsd,
+                        realizedPnlUsd,
+                        ParseMarginModeFromLeverageObject(p)));
+                    parsedRows++;
+                }
+                catch (Exception ex)
+                {
+                    skippedMalformed++;
+                    if (string.IsNullOrWhiteSpace(firstMalformed))
+                    {
+                        firstMalformed = $"row={Trim(item.ToString())}; error={ex.Message}";
+                    }
+
+                    _logger.Warn("Hyperliquid", $"FetchPositions skip malformed row: {ex.Message}");
+                }
             }
         }
 
@@ -949,92 +978,113 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         LogAccountSectionDiagnosticIfNeeded(
             "positions detail",
             totalStopwatch.ElapsedMilliseconds,
-            $"provider={nameof(HyperliquidVenueAdapter)}, info={MaskAddress(infoAddress)}, httpMs={httpStopwatch.ElapsedMilliseconds}, parseMs={parseStopwatch.ElapsedMilliseconds}, rows={totalRows}, parsed={parsedRows}, skippedNoSymbol={skippedNoSymbol}, skippedZeroQty={skippedZeroQty}, skippedMalformed={skippedMalformed}");
+            $"provider={nameof(HyperliquidVenueAdapter)}, info={MaskAddress(infoAddress)}, httpMs={httpElapsedMs}, parseMs={parseStopwatch.ElapsedMilliseconds}, rows={totalRows}, parsed={parsedRows}, skippedNoSymbol={skippedNoSymbol}, skippedZeroQty={skippedZeroQty}, skippedMalformed={skippedMalformed}");
         _logger.Info("Hyperliquid", $"FetchPositions done rows={totalRows}, parsed={parsedRows}, skippedNoSymbol={skippedNoSymbol}, skippedZeroQty={skippedZeroQty}, skippedMalformed={skippedMalformed}, firstRow={firstRaw}, firstMalformed={firstMalformed}");
-        return result;
+        var final = result;
+        if (rateLimited && _positionsCache.Count > 0 && final.Count < _positionsCache.Count)
+        {
+            _logger.Warn("Hyperliquid", $"FetchPositions using stale cache due to rate limit parsed={final.Count}, cached={_positionsCache.Count}");
+            return _positionsCache;
+        }
+
+        _positionsCache = final;
+        return final;
     }
 
     private async Task<IReadOnlyList<VenueOpenOrder>> FetchOpenOrdersAsync(string infoAddress, CancellationToken cancellationToken)
     {
         var totalStopwatch = Stopwatch.StartNew();
-        var httpStopwatch = Stopwatch.StartNew();
-        var payload = JsonSerializer.Serialize(new { type = "openOrders", user = infoAddress });
-        using var req = new HttpRequestMessage(HttpMethod.Post, _restBase + "/info")
-        {
-            Content = new StringContent(payload, Encoding.UTF8, "application/json")
-        };
-
-        using var resp = await _httpClient.SendAsync(req, cancellationToken);
-        var body = await resp.Content.ReadAsStringAsync(cancellationToken);
-        httpStopwatch.Stop();
-        if (!resp.IsSuccessStatusCode)
-        {
-            _logger.Warn("Hyperliquid", $"openOrders failed status={(int)resp.StatusCode}");
-            return [];
-        }
-
         var parseStopwatch = Stopwatch.StartNew();
-        using var doc = JsonDocument.Parse(body);
-        if (doc.RootElement.ValueKind != JsonValueKind.Array)
-        {
-            return [];
-        }
-
+        var httpElapsedMs = 0L;
+        var dexes = await GetKnownPerpDexesAsync(cancellationToken);
         var result = new List<VenueOpenOrder>();
         var totalRows = 0;
-        foreach (var item in doc.RootElement.EnumerateArray())
+        var rateLimited = false;
+        foreach (var dex in dexes)
         {
-            totalRows++;
-            var coin = ReadString(item, "coin");
-            if (string.IsNullOrWhiteSpace(coin))
+            using var req = CreateInfoRequest(_restBase, "openOrders", user: infoAddress, dex: dex);
+            var httpStopwatch = Stopwatch.StartNew();
+            using var resp = await _httpClient.SendAsync(req, cancellationToken);
+            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+            httpStopwatch.Stop();
+            httpElapsedMs += httpStopwatch.ElapsedMilliseconds;
+            if (!resp.IsSuccessStatusCode)
+            {
+                if ((int)resp.StatusCode == 429)
+                {
+                    rateLimited = true;
+                }
+
+                if (string.IsNullOrWhiteSpace(dex))
+                {
+                    _logger.Warn("Hyperliquid", $"openOrders failed status={(int)resp.StatusCode}, body={Trim(body)}");
+                }
+
+                continue;
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
             {
                 continue;
             }
 
-            var size = Math.Abs(ReadDecimal(item, "sz"));
-            if (size <= 0)
+            foreach (var item in doc.RootElement.EnumerateArray())
             {
-                size = Math.Abs(ReadDecimal(item, "origSz"));
-            }
-
-            var limitPx = ReadDecimal(item, "limitPx");
-            if (limitPx <= 0)
-            {
-                limitPx = ReadDecimal(item, "px");
-            }
-
-            var notional = size;
-            if (size > 0 && limitPx > 0)
-            {
-                notional = size * limitPx;
-            }
-
-            var status = ReadString(item, "status");
-            if (string.IsNullOrWhiteSpace(status))
-            {
-                status = "Open";
-            }
-            var orderId = ReadString(item, "oid");
-            if (string.IsNullOrWhiteSpace(orderId))
-            {
-                orderId = ReadString(item, "orderId");
-            }
-            if (string.IsNullOrWhiteSpace(orderId))
-            {
-                var oidRaw = ReadDecimal(item, "oid");
-                if (oidRaw > 0)
+                totalRows++;
+                var coin = ReadString(item, "coin");
+                if (string.IsNullOrWhiteSpace(coin))
                 {
-                    orderId = decimal.Truncate(oidRaw).ToString(CultureInfo.InvariantCulture);
+                    continue;
                 }
-            }
 
-            result.Add(new VenueOpenOrder(
-                coin.ToUpperInvariant(),
-                notional,
-                0m,
-                limitPx > 0 ? limitPx : null,
-                status,
-                orderId));
+                var size = Math.Abs(ReadDecimal(item, "sz"));
+                if (size <= 0)
+                {
+                    size = Math.Abs(ReadDecimal(item, "origSz"));
+                }
+
+                var limitPx = ReadDecimal(item, "limitPx");
+                if (limitPx <= 0)
+                {
+                    limitPx = ReadDecimal(item, "px");
+                }
+
+                var notional = size;
+                if (size > 0 && limitPx > 0)
+                {
+                    notional = size * limitPx;
+                }
+
+                var status = ReadString(item, "status");
+                if (string.IsNullOrWhiteSpace(status))
+                {
+                    status = "Open";
+                }
+
+                var orderId = ReadString(item, "oid");
+                if (string.IsNullOrWhiteSpace(orderId))
+                {
+                    orderId = ReadString(item, "orderId");
+                }
+
+                if (string.IsNullOrWhiteSpace(orderId))
+                {
+                    var oidRaw = ReadDecimal(item, "oid");
+                    if (oidRaw > 0)
+                    {
+                        orderId = decimal.Truncate(oidRaw).ToString(CultureInfo.InvariantCulture);
+                    }
+                }
+
+                result.Add(new VenueOpenOrder(
+                    NormalizeCoin(coin),
+                    notional,
+                    0m,
+                    limitPx > 0 ? limitPx : null,
+                    status,
+                    orderId));
+            }
         }
 
         parseStopwatch.Stop();
@@ -1042,7 +1092,14 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         LogAccountSectionDiagnosticIfNeeded(
             "orders detail",
             totalStopwatch.ElapsedMilliseconds,
-            $"provider={nameof(HyperliquidVenueAdapter)}, info={MaskAddress(infoAddress)}, httpMs={httpStopwatch.ElapsedMilliseconds}, parseMs={parseStopwatch.ElapsedMilliseconds}, rows={totalRows}, parsed={result.Count}");
+            $"provider={nameof(HyperliquidVenueAdapter)}, info={MaskAddress(infoAddress)}, httpMs={httpElapsedMs}, parseMs={parseStopwatch.ElapsedMilliseconds}, rows={totalRows}, parsed={result.Count}");
+        if (rateLimited && _openOrdersCache.Count > 0 && result.Count < _openOrdersCache.Count)
+        {
+            _logger.Warn("Hyperliquid", $"FetchOpenOrders using stale cache due to rate limit parsed={result.Count}, cached={_openOrdersCache.Count}");
+            return _openOrdersCache;
+        }
+
+        _openOrdersCache = result;
         return result;
     }
 
@@ -1051,35 +1108,35 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         var byAsset = new Dictionary<string, (decimal Quantity, decimal Usd)>(StringComparer.OrdinalIgnoreCase);
         var perpUsd = 0m;
         var spotRows = 0;
+        var dexes = await GetKnownPerpDexesAsync(cancellationToken);
 
-        try
+        foreach (var dex in dexes)
         {
-            var payload = JsonSerializer.Serialize(new { type = "clearinghouseState", user = infoAddress });
-            using var req = new HttpRequestMessage(HttpMethod.Post, _restBase + "/info")
+            try
             {
-                Content = new StringContent(payload, Encoding.UTF8, "application/json")
-            };
-
-            using var resp = await _httpClient.SendAsync(req, cancellationToken);
-            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
-            if (!resp.IsSuccessStatusCode)
-            {
-                _logger.Warn("Hyperliquid", $"FetchBalances clearinghouseState failed status={(int)resp.StatusCode}");
-            }
-            else
-            {
-                using var doc = JsonDocument.Parse(body);
-                perpUsd = ReadMarginAccountValue(doc.RootElement);
-                if (perpUsd > 0)
+                using var req = CreateInfoRequest(_restBase, "clearinghouseState", user: infoAddress, dex: dex);
+                using var resp = await _httpClient.SendAsync(req, cancellationToken);
+                var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+                if (!resp.IsSuccessStatusCode)
                 {
-                    MergeBalanceRow(byAsset, "USDC (PERPS)", perpUsd, perpUsd);
-                    _logger.Info("Hyperliquid", $"FetchBalances perp row asset=USDC (PERPS) qty={perpUsd}, usd={perpUsd}");
+                    _logger.Warn("Hyperliquid", $"FetchBalances clearinghouseState failed dex={dex ?? "default"} status={(int)resp.StatusCode}");
+                }
+                else
+                {
+                    using var doc = JsonDocument.Parse(body);
+                    perpUsd += ReadMarginAccountValue(doc.RootElement);
                 }
             }
+            catch (Exception ex)
+            {
+                _logger.Warn("Hyperliquid", $"FetchBalances clearinghouseState parse warning dex={dex ?? "default"}: {ex.Message}");
+            }
         }
-        catch (Exception ex)
+
+        if (perpUsd > 0)
         {
-            _logger.Warn("Hyperliquid", $"FetchBalances clearinghouseState parse warning: {ex.Message}");
+            MergeBalanceRow(byAsset, "USDC (PERPS)", perpUsd, perpUsd);
+            _logger.Info("Hyperliquid", $"FetchBalances perp row asset=USDC (PERPS) qty={perpUsd}, usd={perpUsd}");
         }
 
         try
@@ -1138,50 +1195,41 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
 
     private async Task<IReadOnlyDictionary<string, decimal>> FetchAllMidsAsync(CancellationToken cancellationToken)
     {
-        var reqBody = JsonSerializer.Serialize(new { type = "allMids" });
-        using var req = new HttpRequestMessage(HttpMethod.Post, _restBase + "/info")
-        {
-            Content = new StringContent(reqBody, Encoding.UTF8, "application/json")
-        };
-
-        using var resp = await _httpClient.SendAsync(req, cancellationToken);
-        var body = await resp.Content.ReadAsStringAsync(cancellationToken);
-        if (!resp.IsSuccessStatusCode)
-        {
-            throw new InvalidOperationException($"allMids failed {(int)resp.StatusCode}: {Trim(body)}");
-        }
-
-        using var doc = JsonDocument.Parse(body);
-        if (doc.RootElement.ValueKind != JsonValueKind.Object)
-        {
-            return new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-        }
-
+        var dexes = await GetKnownPerpDexesAsync(cancellationToken);
         var result = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-        foreach (var prop in doc.RootElement.EnumerateObject())
+        foreach (var dex in dexes)
         {
-            var value = ParseDecimal(prop.Value);
-            if (value > 0)
+            using var req = CreateInfoRequest(_restBase, "allMids", dex: dex);
+            using var resp = await _httpClient.SendAsync(req, cancellationToken);
+            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+            if (!resp.IsSuccessStatusCode)
             {
-                result[prop.Name.ToUpperInvariant()] = value;
+                if (string.IsNullOrWhiteSpace(dex))
+                {
+                    throw new InvalidOperationException($"allMids failed {(int)resp.StatusCode}: {Trim(body)}");
+                }
+
+                _logger.Warn("Hyperliquid", $"allMids failed dex={dex} status={(int)resp.StatusCode}, body={Trim(body)}");
+                continue;
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                var value = ParseDecimal(prop.Value);
+                if (value > 0)
+                {
+                    result[NormalizeCoin(prop.Name)] = value;
+                }
             }
         }
 
         return result;
-    }
-
-    private static decimal ComputeDirectionalPct(decimal quantity, decimal entryPrice, decimal markPrice)
-    {
-        if (entryPrice <= 0 || markPrice <= 0 || quantity == 0)
-        {
-            return 0m;
-        }
-
-        var isShort = quantity < 0;
-        var raw = isShort
-            ? ((entryPrice - markPrice) / entryPrice) * 100m
-            : ((markPrice - entryPrice) / entryPrice) * 100m;
-        return raw;
     }
 
     private static decimal ReadDecimal(JsonElement obj, string name)
@@ -1541,11 +1589,9 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
 
         try
         {
-            var payload = JsonSerializer.Serialize(new { type = "clearinghouseState", user = infoAddress });
-            using var req = new HttpRequestMessage(HttpMethod.Post, _restBase + "/info")
-            {
-                Content = new StringContent(payload, Encoding.UTF8, "application/json")
-            };
+            var normalizedCoin = NormalizeCoin(coin);
+            var dex = await ResolveDexAsync(normalizedCoin, cancellationToken);
+            using var req = CreateInfoRequest(_restBase, "clearinghouseState", user: infoAddress, dex: dex);
 
             using var resp = await _httpClient.SendAsync(req, cancellationToken);
             var body = await resp.Content.ReadAsStringAsync(cancellationToken);
@@ -1571,7 +1617,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                 }
 
                 var rowCoin = ReadFirstString(position, "coin", "symbol", "name");
-                if (!string.Equals(rowCoin, coin, StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(NormalizeCoin(rowCoin ?? string.Empty), normalizedCoin, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -1757,22 +1803,108 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         return false;
     }
 
-    private static string NormalizeCoin(string symbol)
+    private static HttpRequestMessage CreateInfoRequest(string restBase, string type, string? user = null, string? dex = null)
+    {
+        var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["type"] = type
+        };
+
+        if (!string.IsNullOrWhiteSpace(user))
+        {
+            payload["user"] = user;
+        }
+
+        if (!string.IsNullOrWhiteSpace(dex))
+        {
+            payload["dex"] = dex;
+        }
+
+        return new HttpRequestMessage(HttpMethod.Post, restBase + "/info")
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+        };
+    }
+
+    private static string? InferDexName(JsonElement universe)
+    {
+        if (universe.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var item in universe.EnumerateArray())
+        {
+            var name = ReadString(item, "name");
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            var colonIndex = name.IndexOf(':');
+            if (colonIndex > 0)
+            {
+                return name[..colonIndex].Trim().ToLowerInvariant();
+            }
+
+            return null;
+        }
+
+        return null;
+    }
+
+    private static (string Coin, string BaseAsset, string? Dex) ParseCoin(string symbol)
     {
         if (string.IsNullOrWhiteSpace(symbol))
         {
-            return "BTC";
+            return ("BTC", "BTC", null);
         }
 
         var upper = symbol.Trim().ToUpperInvariant();
-        if (upper.Contains(':'))
+        var colonIndex = upper.IndexOf(':');
+        if (colonIndex > 0)
         {
-            upper = upper[(upper.LastIndexOf(':') + 1)..];
+            var dex = upper[..colonIndex].Trim().ToLowerInvariant();
+            var remainder = upper[(colonIndex + 1)..];
+            if (remainder.Contains('-'))
+            {
+                remainder = remainder.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0];
+            }
+
+            if (remainder.Contains('_'))
+            {
+                remainder = remainder.Split('_', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0];
+            }
+
+            if (remainder.EndsWith("USDT", StringComparison.Ordinal))
+            {
+                remainder = remainder[..^4];
+            }
+            else if (remainder.EndsWith("USDC", StringComparison.Ordinal))
+            {
+                remainder = remainder[..^4];
+            }
+            else if (remainder.EndsWith("USD", StringComparison.Ordinal))
+            {
+                remainder = remainder[..^3];
+            }
+
+            if (remainder == "XBT")
+            {
+                remainder = "BTC";
+            }
+
+            return ($"{dex}:{remainder}", string.IsNullOrWhiteSpace(remainder) ? "BTC" : remainder, dex);
         }
 
         if (upper.Contains('-'))
         {
-            upper = upper.Split('-', StringSplitOptions.RemoveEmptyEntries)[0];
+            upper = upper.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0];
+        }
+
+        if (upper.Contains('_'))
+        {
+            upper = upper.Split('_', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0];
         }
 
         if (upper.EndsWith("USDT", StringComparison.Ordinal))
@@ -1790,73 +1922,96 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
 
         if (upper == "XBT")
         {
-            return "BTC";
+            upper = "BTC";
         }
 
-        return string.IsNullOrWhiteSpace(upper) ? "BTC" : upper;
+        return (string.IsNullOrWhiteSpace(upper) ? "BTC" : upper, string.IsNullOrWhiteSpace(upper) ? "BTC" : upper, null);
     }
 
-    private async Task<int> ResolveAssetIndexAsync(string coin, CancellationToken cancellationToken)
+    private static string NormalizeCoin(string symbol)
     {
-        if (_assetByCoin is not null && _assetByCoin.TryGetValue(coin, out var cached))
+        return ParseCoin(symbol).Coin;
+    }
+
+    private async Task<IReadOnlyList<string?>> GetKnownPerpDexesAsync(CancellationToken cancellationToken)
+    {
+        if (_assetByCoin is not null && _dexByCoin is not null)
         {
-            return cached;
+            return _knownPerpDexes;
         }
 
         await _metaGate.WaitAsync(cancellationToken);
         try
         {
-            if (_assetByCoin is not null && _assetByCoin.TryGetValue(coin, out cached))
+            if (_assetByCoin is not null && _dexByCoin is not null)
             {
-                return cached;
+                return _knownPerpDexes;
             }
 
-            var reqBody = JsonSerializer.Serialize(new { type = "meta" });
-            using var req = new HttpRequestMessage(HttpMethod.Post, _restBase + "/info")
-            {
-                Content = new StringContent(reqBody, Encoding.UTF8, "application/json")
-            };
+            using var req = CreateInfoRequest(_restBase, "allPerpMetas");
             using var resp = await _httpClient.SendAsync(req, cancellationToken);
             var body = await resp.Content.ReadAsStringAsync(cancellationToken);
             if (!resp.IsSuccessStatusCode)
             {
-                throw new InvalidOperationException($"load meta failed {(int)resp.StatusCode}");
+                throw new InvalidOperationException($"load allPerpMetas failed {(int)resp.StatusCode}");
             }
 
             using var doc = JsonDocument.Parse(body);
-            if (!doc.RootElement.TryGetProperty("universe", out var universe) || universe.ValueKind != JsonValueKind.Array)
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
             {
-                throw new InvalidOperationException("meta response missing universe");
+                throw new InvalidOperationException("allPerpMetas response missing array payload");
             }
 
-            var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var szDecimals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var idx = 0;
-            foreach (var item in universe.EnumerateArray())
+            var assetByCoin = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var dexByCoin = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            var sizeDecimalsByCoin = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var knownDexes = new List<string?> { null };
+
+            var dexIndex = 0;
+            foreach (var dexElement in doc.RootElement.EnumerateArray())
             {
-                if (item.TryGetProperty("name", out var n))
+                if (!dexElement.TryGetProperty("universe", out var universe) || universe.ValueKind != JsonValueKind.Array)
                 {
-                    var name = n.GetString();
-                    if (!string.IsNullOrWhiteSpace(name))
-                    {
-                        map[name] = idx;
-                        szDecimals[name] = ReadInt(item, "szDecimals", defaultValue: 0);
-                    }
+                    dexIndex++;
+                    continue;
                 }
 
-                idx++;
+                var dex = InferDexName(universe);
+                if (!knownDexes.Any(x => string.Equals(x, dex, StringComparison.OrdinalIgnoreCase)))
+                {
+                    knownDexes.Add(dex);
+                }
+
+                var metaIndex = 0;
+                foreach (var item in universe.EnumerateArray())
+                {
+                    var name = ReadString(item, "name");
+                    if (string.IsNullOrWhiteSpace(name))
+                    {
+                        metaIndex++;
+                        continue;
+                    }
+
+                    var coin = NormalizeCoin(name);
+                    var assetId = string.IsNullOrWhiteSpace(dex)
+                        ? metaIndex
+                        : 100000 + (dexIndex * 10000) + metaIndex;
+
+                    assetByCoin[coin] = assetId;
+                    dexByCoin[coin] = dex;
+                    sizeDecimalsByCoin[coin] = ReadInt(item, "szDecimals", defaultValue: 0);
+                    metaIndex++;
+                }
+
+                dexIndex++;
             }
 
-            _assetByCoin = map;
-            _sizeDecimalsByCoin = szDecimals;
-            _logger.Info("Hyperliquid", $"Meta loaded symbols={map.Count}");
-
-            if (!map.TryGetValue(coin, out var asset))
-            {
-                throw new InvalidOperationException($"coin not found in meta: {coin}");
-            }
-
-            return asset;
+            _assetByCoin = assetByCoin;
+            _dexByCoin = dexByCoin;
+            _sizeDecimalsByCoin = sizeDecimalsByCoin;
+            _knownPerpDexes = knownDexes;
+            _logger.Info("Hyperliquid", $"Perp metas loaded symbols={assetByCoin.Count}, dexes={string.Join(',', knownDexes.Select(x => x ?? "default"))}");
+            return _knownPerpDexes;
         }
         finally
         {
@@ -1864,35 +2019,54 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         }
     }
 
+    private async Task<string?> ResolveDexAsync(string coin, CancellationToken cancellationToken)
+    {
+        var normalizedCoin = NormalizeCoin(coin);
+        if (_dexByCoin is not null && _dexByCoin.TryGetValue(normalizedCoin, out var cached))
+        {
+            return cached;
+        }
+
+        await GetKnownPerpDexesAsync(cancellationToken);
+        return _dexByCoin is not null && _dexByCoin.TryGetValue(normalizedCoin, out cached)
+            ? cached
+            : ParseCoin(coin).Dex;
+    }
+
+    private async Task<int> ResolveAssetIndexAsync(string coin, CancellationToken cancellationToken)
+    {
+        var normalizedCoin = NormalizeCoin(coin);
+        if (_assetByCoin is not null && _assetByCoin.TryGetValue(normalizedCoin, out var cached))
+        {
+            return cached;
+        }
+
+        await GetKnownPerpDexesAsync(cancellationToken);
+        if (_assetByCoin is not null && _assetByCoin.TryGetValue(normalizedCoin, out cached))
+        {
+            return cached;
+        }
+
+        throw new InvalidOperationException($"coin not found in meta: {normalizedCoin}");
+    }
+
     private async Task<decimal> ComputeMarketLikePriceAsync(string coin, bool isBuy, CancellationToken cancellationToken)
     {
-        var reqBody = JsonSerializer.Serialize(new { type = "allMids" });
-        using var req = new HttpRequestMessage(HttpMethod.Post, _restBase + "/info")
+        var normalizedCoin = NormalizeCoin(coin);
+        var mids = await GetAllMidsCachedAsync(cancellationToken);
+        if (!mids.Mids.TryGetValue(normalizedCoin, out var mid))
         {
-            Content = new StringContent(reqBody, Encoding.UTF8, "application/json")
-        };
-
-        using var resp = await _httpClient.SendAsync(req, cancellationToken);
-        var body = await resp.Content.ReadAsStringAsync(cancellationToken);
-        if (!resp.IsSuccessStatusCode)
-        {
-            throw new InvalidOperationException($"allMids failed {(int)resp.StatusCode}");
+            throw new InvalidOperationException($"mid price missing: {normalizedCoin}");
         }
 
-        using var doc = JsonDocument.Parse(body);
-        if (!doc.RootElement.TryGetProperty(coin, out var midElement))
-        {
-            throw new InvalidOperationException($"mid price missing: {coin}");
-        }
-
-        var mid = ParseDecimal(midElement);
         var factor = isBuy ? 1.02m : 0.98m;
         return decimal.Round(mid * factor, 6, MidpointRounding.ToEven);
     }
 
     private int ResolveSizeDecimals(string coin)
     {
-        if (_sizeDecimalsByCoin is not null && _sizeDecimalsByCoin.TryGetValue(coin, out var szDecimals))
+        var normalizedCoin = NormalizeCoin(coin);
+        if (_sizeDecimalsByCoin is not null && _sizeDecimalsByCoin.TryGetValue(normalizedCoin, out var szDecimals))
         {
             return Math.Max(0, szDecimals);
         }

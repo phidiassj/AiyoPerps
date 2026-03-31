@@ -23,6 +23,7 @@ This section is intended for users who wake AI agents from the app. AiyoPerps MC
 - The agent should never invent `accountId`, `symbol`, `positionId`, or `orderId`; it should read them from MCP results.
 - If the user wants analysis or recommendations only, the prompt should say so explicitly.
 - The agent should use mutating tools only when the user explicitly authorizes execution.
+- The MCP `tools/list` descriptions already embed a compact baseline workflow for portfolio-wide reads and async execution verification, so the same instructions do not need to be repeated in every wake-up prompt.
 
 ### Common Dashboard MCP tools
 - `dashboard_status_get`: read dashboard runtime status and row counts.
@@ -30,6 +31,8 @@ This section is intended for users who wake AI agents from the app. AiyoPerps MC
 - `dashboard_config_get`: read the current dashboard configuration.
 - `dashboard_config_set`: update the current dashboard configuration.
 - `dashboard_snapshot_get`: read the latest dashboard snapshot, including market rows, positions, and orders.
+- `ai_agent_settings_get`: read the current AI agent scheduler settings, including timed and threshold-based wake rules.
+- `ai_agent_settings_set`: replace the current AI agent scheduler settings, including multiple `price` / `unrealizedPnlPct` wake conditions.
 - `dashboard_start`: start the dashboard runtime.
 - `dashboard_refresh`: refresh the dashboard runtime immediately.
 - `dashboard_stop`: stop the dashboard runtime.
@@ -54,12 +57,14 @@ This section is intended for users who wake AI agents from the app. AiyoPerps MC
 6. Call `dashboard_snapshot_get` to inspect current market rows, positions, and open orders when Dashboard runtime is in use.
 7. Use `positions_list`, `orders_list`, `balances_list`, and `market_snapshot` for extra verification when needed.
 8. After any actual trading action, call `dashboard_refresh`, wait again with `operations_get`, then read `dashboard_snapshot_get` again to verify the final state when Dashboard runtime is in use.
+9. Use `ai_agent_settings_get` / `ai_agent_settings_set` when the user or agent needs automatic wake-up based on time and threshold conditions. Wake conditions use OR semantics: any enabled condition can wake the agent.
 
 ### Operational limitations
 - `dashboard_positions_open` can be used to add exposure or offset part of an existing position, but it is not a dedicated reduce-only partial-close API.
 - `dashboard_positions_close` is the full-close operation for an existing position.
 - MCP tool calls are handled without opening adapter workspace tabs. Agent-driven reads and writes should not depend on UI tab creation.
 - The old dashboard market-news cache has been removed. If the agent needs external market context, it must read files or gather information from the web on its own.
+- Threshold-based AI agent wake conditions inspect live positions through direct account reads and do not require `dashboard_start`.
 
 ## 2. Headless and HTTP Startup
 ### Desktop UI
@@ -337,6 +342,8 @@ Available tools:
 - `dashboard_config_get`
 - `dashboard_config_set`
 - `dashboard_snapshot_get`
+- `ai_agent_settings_get`
+- `ai_agent_settings_set`
 - `dashboard_start`
 - `dashboard_stop`
 - `dashboard_refresh`
@@ -376,6 +383,8 @@ Backward compatibility: dotted names are normalized internally, but new clients 
 - `dashboard_config_get`: none
 - `dashboard_config_set`: same fields as `ApiDashboardConfigurationRequest`
 - `dashboard_snapshot_get`: none
+- `ai_agent_settings_get`: none
+- `ai_agent_settings_set`: same fields as `AIAgentSettings`, including `wakeConditions[]`
 - `dashboard_start`: none
 - `dashboard_stop`: none
 - `dashboard_refresh`: none
@@ -409,6 +418,8 @@ These dashboard MCP tools return data directly:
 - `dashboard_config_get`
 - `dashboard_config_set`
 - `dashboard_snapshot_get`
+- `ai_agent_settings_get`
+- `ai_agent_settings_set`
 
 ## 4.3 Tool Schema Shape
 `tools/list` returns full object schemas with:

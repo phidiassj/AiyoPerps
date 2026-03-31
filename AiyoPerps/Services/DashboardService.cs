@@ -13,7 +13,9 @@ namespace AiyoPerps.Services;
 
 public sealed class DashboardService : IAsyncDisposable
 {
-    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(800);
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan AccountStateRefreshInterval = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan BalanceRefreshInterval = TimeSpan.FromSeconds(9);
     private static readonly IReadOnlyDictionary<string, int> MarketCapRanks = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
     {
         ["BTC"] = 1,
@@ -75,8 +77,11 @@ public sealed class DashboardService : IAsyncDisposable
     private Task? _runTask;
     private DashboardConfiguration _configuration = new([], null, "5m", false);
     private DashboardSnapshot _snapshot = DashboardSnapshot.Empty;
+    private Dictionary<Guid, VenueAccountSnapshot> _accountSnapshots = new();
     private Dictionary<Guid, long> _cursors = new();
     private Dictionary<Guid, decimal> _selectedSymbolPrices = new();
+    private DateTimeOffset _lastAccountStateRefreshAt = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastBalanceRefreshAt = DateTimeOffset.MinValue;
     private bool _isRunning;
     private int _runGeneration;
 
@@ -220,13 +225,16 @@ public sealed class DashboardService : IAsyncDisposable
             _runCts?.Cancel();
             _runCts?.Dispose();
             _runCts = CancellationTokenSource.CreateLinkedTokenSource(_disposeCts.Token);
+            _accountSnapshots.Clear();
             _snapshot = _snapshot with { IsRunning = true };
+            _lastAccountStateRefreshAt = DateTimeOffset.MinValue;
+            _lastBalanceRefreshAt = DateTimeOffset.MinValue;
             snapshot = _snapshot;
         }
 
         RaiseSnapshotChanged(snapshot);
         _runTask = Task.Run(() => RunLoopAsync(runGeneration, _runCts.Token), _runCts.Token);
-        await RefreshAsyncCoreAsync(runGeneration, cancellationToken);
+        await RefreshAsyncCoreAsync(runGeneration, cancellationToken, forceAccountState: true);
         return GetSnapshot();
     }
 
@@ -244,8 +252,11 @@ public sealed class DashboardService : IAsyncDisposable
             runTask = _runTask;
             _runCts = null;
             _runTask = null;
+            _accountSnapshots.Clear();
             _cursors.Clear();
             _selectedSymbolPrices.Clear();
+            _lastAccountStateRefreshAt = DateTimeOffset.MinValue;
+            _lastBalanceRefreshAt = DateTimeOffset.MinValue;
             _snapshot = new DashboardSnapshot(false, configuration, [], [], [], DateTimeOffset.UtcNow);
         }
 
@@ -283,7 +294,7 @@ public sealed class DashboardService : IAsyncDisposable
             runGeneration = _runGeneration;
         }
 
-        return await RefreshAsyncCoreAsync(runGeneration, cancellationToken);
+        return await RefreshAsyncCoreAsync(runGeneration, cancellationToken, forceAccountState: true);
     }
 
     public async Task<object> OpenPositionAsync(ApiOpenPositionRequest request, CancellationToken cancellationToken = default)
@@ -339,7 +350,7 @@ public sealed class DashboardService : IAsyncDisposable
         {
             try
             {
-                await RefreshAsyncCoreAsync(runGeneration, cancellationToken);
+                await RefreshAsyncCoreAsync(runGeneration, cancellationToken, forceAccountState: false);
             }
             catch (OperationCanceledException)
             {
@@ -352,15 +363,44 @@ public sealed class DashboardService : IAsyncDisposable
         }
     }
 
-    private async Task<DashboardSnapshot> RefreshAsyncCoreAsync(int expectedRunGeneration, CancellationToken cancellationToken)
+    private async Task<DashboardSnapshot> RefreshAsyncCoreAsync(int expectedRunGeneration, CancellationToken cancellationToken, bool forceAccountState)
     {
         DashboardConfiguration configuration;
+        AccountSnapshotSections accountSections;
         lock (_sync)
         {
             configuration = _configuration;
             if (!_isRunning || expectedRunGeneration != _runGeneration)
             {
                 return _snapshot;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var includeAccountState = forceAccountState
+                || _lastAccountStateRefreshAt == DateTimeOffset.MinValue
+                || now - _lastAccountStateRefreshAt >= AccountStateRefreshInterval;
+            if (includeAccountState)
+            {
+                _lastAccountStateRefreshAt = now;
+            }
+
+            var includeBalances = forceAccountState
+                || _lastBalanceRefreshAt == DateTimeOffset.MinValue
+                || now - _lastBalanceRefreshAt >= BalanceRefreshInterval;
+            if (includeBalances)
+            {
+                _lastBalanceRefreshAt = now;
+            }
+
+            accountSections = AccountSnapshotSections.None;
+            if (includeAccountState)
+            {
+                accountSections |= AccountSnapshotSections.Positions | AccountSnapshotSections.Orders;
+            }
+
+            if (includeBalances)
+            {
+                accountSections |= AccountSnapshotSections.Balances;
             }
         }
 
@@ -393,9 +433,20 @@ public sealed class DashboardService : IAsyncDisposable
                 _selectedSymbolPrices.Remove(account.AccountId);
             }
 
-            var accountPositions = await _tradingApiService.ListPositionsAsync(account.AccountId, null, cancellationToken, notifyLifecycleEvents: false);
-            var accountOrders = await _tradingApiService.ListOpenOrdersAsync(account.AccountId, null, cancellationToken, notifyLifecycleEvents: false);
-            var accountBalances = await _tradingApiService.ListBalancesAsync(account.AccountId, null, cancellationToken, notifyLifecycleEvents: false);
+            var accountSnapshot = accountSections == AccountSnapshotSections.None
+                ? GetCachedAccountSnapshot(account.AccountId)
+                : MergeAccountSnapshot(
+                    account.AccountId,
+                    await _tradingApiService.GetAccountSnapshotAsync(
+                        account.AccountId,
+                        null,
+                        accountSections,
+                        cancellationToken,
+                        notifyLifecycleEvents: false),
+                    accountSections);
+            var accountPositions = accountSnapshot.Positions;
+            var accountOrders = accountSnapshot.OpenOrders;
+            var accountBalances = accountSnapshot.Balances;
 
             var balanceUsd = accountBalances.Sum(x => x.UsdValue);
             var availableUsd = ResolveAvailableUsd(accountBalances, balanceUsd);
@@ -451,6 +502,31 @@ public sealed class DashboardService : IAsyncDisposable
 
         RaiseSnapshotChanged(snapshot);
         return snapshot;
+    }
+
+    private VenueAccountSnapshot MergeAccountSnapshot(Guid accountId, VenueAccountSnapshot latestSnapshot, AccountSnapshotSections sections)
+    {
+        lock (_sync)
+        {
+            _accountSnapshots.TryGetValue(accountId, out var existingSnapshot);
+            var mergedSnapshot = new VenueAccountSnapshot(
+                latestSnapshot.Timestamp,
+                sections.HasFlag(AccountSnapshotSections.Positions) ? latestSnapshot.Positions : existingSnapshot?.Positions ?? [],
+                sections.HasFlag(AccountSnapshotSections.Orders) ? latestSnapshot.OpenOrders : existingSnapshot?.OpenOrders ?? [],
+                sections.HasFlag(AccountSnapshotSections.Balances) ? latestSnapshot.Balances : existingSnapshot?.Balances ?? []);
+            _accountSnapshots[accountId] = mergedSnapshot;
+            return mergedSnapshot;
+        }
+    }
+
+    private VenueAccountSnapshot GetCachedAccountSnapshot(Guid accountId)
+    {
+        lock (_sync)
+        {
+            return _accountSnapshots.TryGetValue(accountId, out var existingSnapshot)
+                ? existingSnapshot
+                : new VenueAccountSnapshot(DateTimeOffset.UtcNow, [], [], []);
+        }
     }
 
     private IReadOnlyList<DashboardAccountOptionDto> GetSelectableAccountsUnsafe(bool showTestnet)
@@ -606,6 +682,16 @@ public sealed class DashboardService : IAsyncDisposable
         };
     }
 
+    private static string NormalizeMarginMode(MarginMode marginMode)
+    {
+        return marginMode switch
+        {
+            MarginMode.Cross => "Cross",
+            MarginMode.Isolated => "Isolated",
+            _ => "-"
+        };
+    }
+
     private static SymbolCatalogEntry SelectPreferredDashboardEntry(IEnumerable<SymbolCatalogEntry> entries)
     {
         return entries
@@ -667,7 +753,7 @@ public sealed class DashboardService : IAsyncDisposable
         return int.MaxValue;
     }
 
-    private static decimal ResolveAvailableUsd(IReadOnlyList<ApiBalanceDto> balances, decimal balanceUsd)
+    private static decimal ResolveAvailableUsd(IReadOnlyList<VenueBalance> balances, decimal balanceUsd)
     {
         var explicitAvailableUsd = balances
             .Where(x => x.AvailableUsdValue.HasValue)

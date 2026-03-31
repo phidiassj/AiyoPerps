@@ -1,11 +1,12 @@
 ﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:AiyoPerps.ViewModels"
+        xmlns:svc="clr-namespace:AiyoPerps.Services"
         x:Class="AiyoPerps.Views.AIAgentSettingWindow"
-        Width="880"
-        Height="760"
-        MinWidth="720"
-        MinHeight="620"
+        Width="980"
+        Height="860"
+        MinWidth="760"
+        MinHeight="680"
         Icon="avares://AiyoPerps/Assets/logo.ico"
         Title="{Binding L[Main_AgentSettings]}">
 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,20,0">
@@ -14,7 +15,7 @@
         <TextBlock Text="{Binding L[Main_AgentSettings]}" FontSize="22" FontWeight="Bold" Foreground="#DDF4F8" />
 
         <Border Classes="card">
-          <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="180,*" RowSpacing="10" ColumnSpacing="12">
+          <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnDefinitions="180,*" RowSpacing="10" ColumnSpacing="12">
             <TextBlock Text="{Binding L[Agent_Enable]}" Classes="label" VerticalAlignment="Center" />
             <ToggleSwitch Grid.Column="1"
                           IsChecked="{Binding IsEnabled}"
@@ -40,43 +41,150 @@
 
             <TextBlock Grid.Row="2" Text="{Binding L[Agent_WakeInterval]}" Classes="label" VerticalAlignment="Center" />
             <NumericUpDown Grid.Row="2" Grid.Column="1"
-                           Minimum="1"
+                           Minimum="0"
                            Maximum="1440"
                            Value="{Binding WakeIntervalMinutes}" />
 
-            <TextBlock Grid.Row="3" Text="{Binding L[Agent_WorkingDirectory]}" Classes="label" VerticalAlignment="Center" />
-            <Grid Grid.Row="3" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <TextBlock Grid.Row="3" Grid.Column="1"
+                       Text="{Binding L[Agent_WakeIntervalHint]}"
+                       Foreground="#97B7C2"
+                       TextWrapping="Wrap" />
+
+            <TextBlock Grid.Row="4" Text="{Binding L[Agent_WorkingDirectory]}" Classes="label" VerticalAlignment="Center" />
+            <Grid Grid.Row="4" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
               <TextBox Text="{Binding WorkingDirectory}" />
               <Button Grid.Column="1" Content="{Binding L[Agent_Browse]}" Click="OnBrowseWorkingDirectoryClick" />
             </Grid>
 
-            <TextBlock Grid.Row="4" Text="{Binding L[Agent_TimeoutSeconds]}" Classes="label" VerticalAlignment="Center" />
-            <NumericUpDown Grid.Row="4" Grid.Column="1"
+            <TextBlock Grid.Row="5" Text="{Binding L[Agent_TimeoutSeconds]}" Classes="label" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Row="5" Grid.Column="1"
                            Minimum="10"
                            Maximum="3600"
                            Value="{Binding TimeoutSeconds}" />
 
-            <TextBlock Grid.Row="5" Text="{Binding L[Agent_CommandTemplate]}" Classes="label" VerticalAlignment="Top" />
-            <TextBox Grid.Row="5" Grid.Column="1"
+            <TextBlock Grid.Row="6" Text="{Binding L[Agent_CommandTemplate]}" Classes="label" VerticalAlignment="Top" />
+            <TextBox Grid.Row="6" Grid.Column="1"
                      Height="96"
                      AcceptsReturn="True"
                      TextWrapping="Wrap"
                      Text="{Binding CommandTemplate}" />
 
-            <TextBlock Grid.Row="6" Text="{Binding L[Agent_PromptTemplate]}" Classes="label" VerticalAlignment="Top" />
-            <TextBox Grid.Row="6" Grid.Column="1"
+            <TextBlock Grid.Row="7" Text="{Binding L[Agent_PromptTemplate]}" Classes="label" VerticalAlignment="Top" />
+            <TextBox Grid.Row="7" Grid.Column="1"
                      Height="200"
                      AcceptsReturn="True"
                      TextWrapping="Wrap"
                      Text="{Binding PromptTemplate}" />
 
-            <TextBlock Grid.Row="7" Text="{Binding L[Agent_EnvironmentVariables]}" Classes="label" VerticalAlignment="Top" />
-            <TextBox Grid.Row="7" Grid.Column="1"
+            <TextBlock Grid.Row="8" Text="{Binding L[Agent_EnvironmentVariables]}" Classes="label" VerticalAlignment="Top" />
+            <TextBox Grid.Row="8" Grid.Column="1"
                      Height="120"
                      AcceptsReturn="True"
                      TextWrapping="Wrap"
                      Watermark="{Binding L[Agent_EnvironmentVariables_Placeholder]}"
                      Text="{Binding EnvironmentVariables}" />
+          </Grid>
+        </Border>
+
+        <Border Classes="card">
+          <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="10">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Text="{Binding L[Agent_WakeConditions]}" FontWeight="Bold" Foreground="#E2F7FB" />
+              <Button Grid.Column="1"
+                      Content="{Binding L[Agent_AddWakeCondition]}"
+                      Command="{Binding AddWakeConditionCommand}" />
+            </Grid>
+
+            <TextBlock Grid.Row="1"
+                       Text="{Binding L[Agent_WakeConditionsHint]}"
+                       TextWrapping="Wrap"
+                       Foreground="#A8C8D4" />
+
+            <ItemsControl Grid.Row="2" ItemsSource="{Binding WakeConditions}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:AIAgentWakeConditionItemViewModel">
+                  <Border Background="#122A35" BorderBrush="#21414D" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,0,8">
+                    <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto" RowSpacing="8" ColumnSpacing="10">
+                      
+                        <WrapPanel Orientation="Horizontal" ItemSpacing="10" LineSpacing="10">
+                        <ToggleSwitch IsChecked="{Binding IsEnabled}"
+                                      OnContent="ON"
+                                      OffContent="OFF"
+                                      HorizontalAlignment="Left" />
+
+                        <ComboBox ItemsSource="{Binding AccountOptions}"
+                                  SelectedItem="{Binding SelectedAccount}">
+                          <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:AIAgentAccountOption">
+                              <TextBlock Text="{Binding DisplayName}" />
+                            </DataTemplate>
+                          </ComboBox.ItemTemplate>
+                          <ComboBox.SelectionBoxItemTemplate>
+                            <DataTemplate x:DataType="vm:AIAgentAccountOption">
+                              <TextBlock Text="{Binding DisplayName}" />
+                            </DataTemplate>
+                          </ComboBox.SelectionBoxItemTemplate>
+                        </ComboBox>
+
+                      <ComboBox MinWidth="100"
+                                ItemsSource="{Binding SymbolOptions}"
+                                SelectedItem="{Binding SelectedSymbolOption}">
+                        <ComboBox.ItemTemplate>
+                          <DataTemplate x:DataType="svc:DashboardSymbolOptionDto">
+                            <TextBlock Text="{Binding Display}" />
+                          </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                        <ComboBox.SelectionBoxItemTemplate>
+                          <DataTemplate x:DataType="svc:DashboardSymbolOptionDto">
+                            <TextBlock Text="{Binding Display}" />
+                          </DataTemplate>
+                        </ComboBox.SelectionBoxItemTemplate>
+                      </ComboBox>
+
+                        <ComboBox ItemsSource="{Binding MetricOptions}"
+                                  SelectedItem="{Binding SelectedMetric}">
+                          <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:NamedOption">
+                              <TextBlock Text="{Binding DisplayName}" />
+                            </DataTemplate>
+                          </ComboBox.ItemTemplate>
+                          <ComboBox.SelectionBoxItemTemplate>
+                            <DataTemplate x:DataType="vm:NamedOption">
+                              <TextBlock Text="{Binding DisplayName}" />
+                            </DataTemplate>
+                          </ComboBox.SelectionBoxItemTemplate>
+                        </ComboBox>
+
+                        <ComboBox ItemsSource="{Binding ComparisonOptions}"
+                                  SelectedItem="{Binding SelectedComparison}">
+                          <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:NamedOption">
+                              <TextBlock Text="{Binding DisplayName}" />
+                            </DataTemplate>
+                          </ComboBox.ItemTemplate>
+                          <ComboBox.SelectionBoxItemTemplate>
+                            <DataTemplate x:DataType="vm:NamedOption">
+                              <TextBlock Text="{Binding DisplayName}" />
+                            </DataTemplate>
+                          </ComboBox.SelectionBoxItemTemplate>
+                        </ComboBox>
+
+                        <NumericUpDown MaxWidth="300" MinWidth="150" TextAlignment="Center"
+                                       Minimum="-100000000"
+                                       Maximum="100000000"
+                                       Increment="0.1"
+                                       FormatString="0.####"
+                                       Value="{Binding Threshold}" />
+
+                        <Button Content="{Binding DeleteLabel}"
+                                Command="{Binding DeleteCommand}" />
+                      </WrapPanel>
+
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
           </Grid>
         </Border>
 

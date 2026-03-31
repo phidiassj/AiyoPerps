@@ -236,7 +236,7 @@ public sealed class DashboardTabViewModelTests
 
         scope.Preferences.SaveAIAgentSettings(settings);
         scope.HttpApiState.MarkInitializing(5078);
-        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, scope.Logger);
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
 
         var viewModel = CreateSubject();
         SetField(viewModel, "_aiAgentExecutionService", service);
@@ -263,7 +263,7 @@ public sealed class DashboardTabViewModelTests
             30);
 
         scope.Preferences.SaveAIAgentSettings(settings);
-        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, scope.Logger);
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
         service.Start();
 
         var viewModel = CreateSubject();

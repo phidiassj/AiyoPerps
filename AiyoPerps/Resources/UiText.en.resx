@@ -681,6 +681,42 @@
   <data name="Agent_WakeIntervalFormat" xml:space="preserve">
     <value>Every {0} minute(s)</value>
   </data>
+  <data name="Agent_WakeIntervalDisabled" xml:space="preserve">
+    <value>Timed wake disabled</value>
+  </data>
+  <data name="Agent_WakeIntervalWithConditionsFormat" xml:space="preserve">
+    <value>{0}, {1} condition wake(s)</value>
+  </data>
+  <data name="Agent_WakeIntervalHint" xml:space="preserve">
+    <value>Use 0 to disable timed wake and keep only threshold-based wake conditions.</value>
+  </data>
+  <data name="Agent_WakeConditions" xml:space="preserve">
+    <value>Wake Conditions</value>
+  </data>
+  <data name="Agent_WakeConditionsHint" xml:space="preserve">
+    <value>You can define multiple position triggers. The AI agent wakes when any enabled condition crosses from unmet to met.</value>
+  </data>
+  <data name="Agent_AddWakeCondition" xml:space="preserve">
+    <value>Add Condition</value>
+  </data>
+  <data name="Agent_WakeConditionAllAccounts" xml:space="preserve">
+    <value>All enabled accounts</value>
+  </data>
+  <data name="Agent_WakeConditionSymbol" xml:space="preserve">
+    <value>Symbol, for example BTC or BTC-USDT</value>
+  </data>
+  <data name="Agent_WakeMetricPrice" xml:space="preserve">
+    <value>Price</value>
+  </data>
+  <data name="Agent_WakeMetricUnrealizedPnlPct" xml:space="preserve">
+    <value>Unrealized PnL %</value>
+  </data>
+  <data name="Agent_WakeComparisonGreaterThan" xml:space="preserve">
+    <value>Greater Than</value>
+  </data>
+  <data name="Agent_WakeComparisonLessThan" xml:space="preserve">
+    <value>Less Than</value>
+  </data>
   <data name="Agent_LastRun" xml:space="preserve">
     <value>Last Run</value>
   </data>

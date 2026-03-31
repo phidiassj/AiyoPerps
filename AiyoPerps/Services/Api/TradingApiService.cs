@@ -309,6 +309,16 @@ public sealed class TradingApiService : IAsyncDisposable
             .ToList();
     }
 
+    public Task<VenueAccountSnapshot> GetAccountSnapshotAsync(
+        Guid accountId,
+        string? symbol,
+        AccountSnapshotSections sections,
+        CancellationToken cancellationToken = default,
+        bool notifyLifecycleEvents = true)
+    {
+        return GetSnapshotAsync(accountId, symbol, sections, cancellationToken, notifyLifecycleEvents);
+    }
+
     public async Task<object> OpenPositionAsync(ApiOpenPositionRequest request, CancellationToken cancellationToken = default, bool notifyLifecycleEvents = true)
     {
         var session = await GetSessionAsync(request.AccountId, request.Symbol, cancellationToken, notifyLifecycleEvents);

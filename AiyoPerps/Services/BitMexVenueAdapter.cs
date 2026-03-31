@@ -614,11 +614,12 @@ public sealed class BitMexVenueAdapter : IPerpVenue, IHistoricalCandleProvider, 
                 unrealizedUsd = ReadDecimal(item, "funding");
             }
 
-            var unrealizedPct = NormalizePct(ReadDecimal(item, "unrealisedPnlPcnt"));
-            if (unrealizedPct == 0m && unrealizedUsd != 0m && notionalUsd > 0m)
-            {
-                unrealizedPct = (unrealizedUsd / notionalUsd) * 100m;
-            }
+            var unrealizedPct = PositionPnlMath.ComputeUnrealizedPnlPctOrDirectional(
+                notionalUsd,
+                unrealizedUsd,
+                qty,
+                entryPrice,
+                markPrice);
 
             var realizedPct = NormalizePct(ReadDecimal(item, "realisedPnlPcnt"));
             var realizedUsd = 0m;

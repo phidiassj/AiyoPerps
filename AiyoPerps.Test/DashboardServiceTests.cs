@@ -1,9 +1,12 @@
 using AiyoPerps.Models;
 using AiyoPerps.Services;
 using AiyoPerps.Services.Api;
+using AiyoPerps.Core;
+using System.Collections.Generic;
 using System;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
@@ -204,6 +207,36 @@ public sealed class DashboardServiceTests
         Assert.Contains(snapshot.Markets, x => x.AccountId == accountB.AccountId && x.RawSymbol == "BTC-USDC" && x.Symbol == "BTC");
     }
 
+    [Fact]
+    public async Task RefreshAsync_UsesSingleCombinedSnapshotRequestAndCachesBalances()
+    {
+        var venue = new CountingSnapshotVenue();
+        var fixture = await TestFixture.CreateAsync(new CountingVenueFactory(venue));
+        await using var _ = fixture;
+
+        var account = fixture.AddAccount("CountingVenue", "mainnet", "BTCUSDT");
+
+        await fixture.Dashboard.UpdateConfigurationAsync(new DashboardConfiguration(
+            [account.AccountId],
+            "BTCUSDT",
+            "5m",
+            false));
+
+        await fixture.Dashboard.StartAsync();
+        Assert.Equal(new[] { AccountSnapshotSections.All }, venue.RequestedSections);
+
+        venue.Reset();
+
+        var refreshed = await fixture.Dashboard.RefreshAsync();
+
+        Assert.Single(venue.RequestedSections);
+        Assert.Equal(AccountSnapshotSections.All, venue.RequestedSections[0]);
+        Assert.Single(refreshed.Positions);
+        Assert.Single(refreshed.Orders);
+        Assert.Single(refreshed.Markets);
+        Assert.Equal(10000m, refreshed.Markets[0].Balance);
+    }
+
     private sealed class TestFixture : IAsyncDisposable
     {
         private readonly AccountStore _accountStore;
@@ -222,14 +255,14 @@ public sealed class DashboardServiceTests
 
         public DashboardService Dashboard { get; }
 
-        public static Task<TestFixture> CreateAsync()
+        public static Task<TestFixture> CreateAsync(IVenueFactory? venueFactory = null)
         {
             var logger = new AppLogger();
             var repository = new AccountRepository(new AesSecretProtector());
             var accountStore = new AccountStore(repository);
             ClearAccounts(accountStore);
             var symbols = new SymbolCatalogRepository();
-            var trading = new TradingApiService(accountStore, new VenueFactory(logger), symbols, logger);
+            var trading = new TradingApiService(accountStore, venueFactory ?? new VenueFactory(logger), symbols, logger);
             var dashboard = new DashboardService(accountStore.Accounts, trading, symbols, logger);
             return Task.FromResult(new TestFixture(accountStore, symbols, trading, dashboard));
         }
@@ -271,5 +304,71 @@ public sealed class DashboardServiceTests
                 accountStore.Accounts.Add(account);
             }
         }
+    }
+
+    private sealed class CountingVenueFactory(CountingSnapshotVenue venue) : IVenueFactory
+    {
+        public IPerpVenue Create(AccountProfile account, AccountCredentials credentials) => venue;
+    }
+
+    private sealed class CountingSnapshotVenue : IPerpVenue, IAccountStateProvider
+    {
+        public List<AccountSnapshotSections> RequestedSections { get; } = [];
+
+        public string VenueId => "CountingVenue";
+
+        public Task ConnectMarketDataAsync(IEnumerable<string> subscriptions, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task DisconnectMarketDataAsync(CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task<(bool IsSuccess, string Message)> ConfigureLeverageAsync(string symbol, decimal leverage, MarginMode marginMode, CancellationToken cancellationToken = default)
+            => Task.FromResult((true, "ok"));
+
+        public Task<OrderAck> PlaceOrderAsync(string symbol, string side, decimal qty, decimal? price, CancellationToken cancellationToken = default)
+            => Task.FromResult(new OrderAck(DateTimeOffset.UtcNow, "order", true, "ok"));
+
+        public Task<OrderAck> PlaceCloseOrderAsync(string symbol, string side, decimal positionQty, decimal? price, CancellationToken cancellationToken = default)
+            => Task.FromResult(new OrderAck(DateTimeOffset.UtcNow, "order", true, "ok"));
+
+        public Task<OrderAck> CancelOrderAsync(string symbol, string orderId, CancellationToken cancellationToken = default)
+            => Task.FromResult(new OrderAck(DateTimeOffset.UtcNow, orderId, true, "ok"));
+
+        public Task<(bool IsSuccess, string Message)> ValidateConnectionAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult((true, "ok"));
+
+        public async IAsyncEnumerable<MarketEvent> MarketEvents([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(50, cancellationToken);
+                yield return new TradeTick(DateTimeOffset.UtcNow, 68000m, 1m);
+            }
+        }
+
+        public Task<VenueAccountSnapshot> GetAccountSnapshotAsync(AccountSnapshotSections sections, CancellationToken cancellationToken = default)
+        {
+            RequestedSections.Add(sections);
+
+            var positions = sections.HasFlag(AccountSnapshotSections.Positions)
+                ? new[] { new VenuePosition("BTCUSDT", 1m, 68000m, 5m, 67000m, 68000m, 1.49m, 1000m, 0m, MarginMode.Cross) }
+                : [];
+            var orders = sections.HasFlag(AccountSnapshotSections.Orders)
+                ? new[] { new VenueOpenOrder("BTCUSDT", 1000m, 5m, 69000m, "Open", "order-1", MarginMode.Cross) }
+                : [];
+            var balances = sections.HasFlag(AccountSnapshotSections.Balances)
+                ? new[] { new VenueBalance("USDT", 10000m, 10000m, 9000m, 9000m) }
+                : [];
+
+            return Task.FromResult(new VenueAccountSnapshot(DateTimeOffset.UtcNow, positions, orders, balances));
+        }
+
+        public void Reset()
+        {
+            RequestedSections.Clear();
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

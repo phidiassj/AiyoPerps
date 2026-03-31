@@ -12,6 +12,8 @@ namespace AiyoPerps.Services;
 
 public sealed class SymbolCatalogSyncService
 {
+    private sealed record HyperliquidPerpDex(string? Dex, IReadOnlyList<string> Symbols);
+
     private readonly SymbolCatalogRepository _repository;
     private readonly AppLogger _logger;
     private readonly HttpClient _http = new();
@@ -125,62 +127,39 @@ public sealed class SymbolCatalogSyncService
         var baseUrl = string.Equals(environment, "testnet", StringComparison.OrdinalIgnoreCase)
             ? "https://api.hyperliquid-testnet.xyz"
             : "https://api.hyperliquid.xyz";
-        var url = $"{baseUrl}/info";
 
         try
         {
             _logger.Info("SymbolSync", $"Hyperliquid sync start env={environment}");
-            using var req = new HttpRequestMessage(HttpMethod.Post, url)
-            {
-                Content = new StringContent(JsonSerializer.Serialize(new { type = "meta" }), Encoding.UTF8, "application/json")
-            };
-
-            using var resp = await _http.SendAsync(req, cancellationToken);
-            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
-            if (!resp.IsSuccessStatusCode)
-            {
-                _logger.Error("SymbolSync", $"Hyperliquid sync failed env={environment}, status={(int)resp.StatusCode}, body={Trim(body)}");
-                return;
-            }
-
-            using var doc = JsonDocument.Parse(body);
-            if (!doc.RootElement.TryGetProperty("universe", out var universe) || universe.ValueKind != JsonValueKind.Array)
-            {
-                _logger.Warn("SymbolSync", $"Hyperliquid sync unexpected payload env={environment}");
-                return;
-            }
-
-            var mids = await FetchHyperliquidMidsAsync(baseUrl, cancellationToken);
+            var dexes = await FetchHyperliquidPerpDexesAsync(baseUrl, cancellationToken);
+            var mids = await FetchHyperliquidMidsAsync(baseUrl, dexes, cancellationToken);
             var symbols = new List<SymbolCatalogUpsert>();
             var skippedNoMid = 0;
             var skippedInvalid = 0;
-            foreach (var item in universe.EnumerateArray())
+            foreach (var dex in dexes)
             {
-                if (!item.TryGetProperty("name", out var name))
+                foreach (var symbol in dex.Symbols)
                 {
-                    continue;
-                }
+                    if (string.IsNullOrWhiteSpace(symbol) || !IsValidHyperliquidSymbol(symbol))
+                    {
+                        skippedInvalid++;
+                        continue;
+                    }
 
-                var symbol = name.GetString();
-                if (string.IsNullOrWhiteSpace(symbol) || !IsValidHyperliquidSymbol(symbol))
-                {
-                    skippedInvalid++;
-                    continue;
-                }
+                    if (!mids.TryGetValue(symbol, out var mid) || mid <= 0)
+                    {
+                        skippedNoMid++;
+                        continue;
+                    }
 
-                if (!mids.TryGetValue(symbol.ToUpperInvariant(), out var mid) || mid <= 0)
-                {
-                    skippedNoMid++;
-                    continue;
+                    symbols.Add(SymbolCatalogUpsert.FromVenueSymbol(
+                        "Hyperliquid",
+                        symbol,
+                        baseAsset: NormalizeHyperliquidBaseAsset(symbol),
+                        quoteAsset: "USDC",
+                        settleAsset: "USDC",
+                        contractType: "PERP"));
                 }
-
-                symbols.Add(SymbolCatalogUpsert.FromVenueSymbol(
-                    "Hyperliquid",
-                    symbol,
-                    baseAsset: symbol,
-                    quoteAsset: "USDC",
-                    settleAsset: "USDC",
-                    contractType: "PERP"));
             }
 
             var result = _repository.ReplaceSymbols("Hyperliquid", environment, symbols);
@@ -423,48 +402,133 @@ public sealed class SymbolCatalogSyncService
         }
     }
 
-    private async Task<Dictionary<string, decimal>> FetchHyperliquidMidsAsync(string baseUrl, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<HyperliquidPerpDex>> FetchHyperliquidPerpDexesAsync(string baseUrl, CancellationToken cancellationToken)
     {
         var url = $"{baseUrl}/info";
         using var req = new HttpRequestMessage(HttpMethod.Post, url)
         {
-            Content = new StringContent(JsonSerializer.Serialize(new { type = "allMids" }), Encoding.UTF8, "application/json")
+            Content = new StringContent(JsonSerializer.Serialize(new { type = "allPerpMetas" }), Encoding.UTF8, "application/json")
         };
 
         using var resp = await _http.SendAsync(req, cancellationToken);
         var body = await resp.Content.ReadAsStringAsync(cancellationToken);
         if (!resp.IsSuccessStatusCode)
         {
-            _logger.Warn("SymbolSync", $"Hyperliquid allMids failed status={(int)resp.StatusCode}, body={Trim(body)}");
-            return new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            _logger.Warn("SymbolSync", $"Hyperliquid allPerpMetas failed status={(int)resp.StatusCode}, body={Trim(body)}");
+            return [];
         }
 
         using var doc = JsonDocument.Parse(body);
-        if (doc.RootElement.ValueKind != JsonValueKind.Object)
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
         {
-            return new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            return [];
         }
 
-        var mids = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-        foreach (var prop in doc.RootElement.EnumerateObject())
+        var dexes = new List<HyperliquidPerpDex>();
+        foreach (var dexElement in doc.RootElement.EnumerateArray())
         {
-            if (prop.Value.ValueKind == JsonValueKind.String &&
-                decimal.TryParse(prop.Value.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed) &&
-                parsed > 0)
+            if (!dexElement.TryGetProperty("universe", out var universe) || universe.ValueKind != JsonValueKind.Array)
             {
-                mids[prop.Name.ToUpperInvariant()] = parsed;
                 continue;
             }
 
-            if (prop.Value.ValueKind == JsonValueKind.Number &&
-                prop.Value.TryGetDecimal(out var numeric) &&
-                numeric > 0)
+            var symbols = universe.EnumerateArray()
+                .Select(item => ReadString(item, "name"))
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Select(name => name!.Trim())
+                .ToList();
+
+            if (symbols.Count == 0)
             {
-                mids[prop.Name.ToUpperInvariant()] = numeric;
+                continue;
+            }
+
+            dexes.Add(new HyperliquidPerpDex(InferHyperliquidDexName(symbols), symbols));
+        }
+
+        return dexes;
+    }
+
+    private async Task<Dictionary<string, decimal>> FetchHyperliquidMidsAsync(
+        string baseUrl,
+        IReadOnlyList<HyperliquidPerpDex> dexes,
+        CancellationToken cancellationToken)
+    {
+        var url = $"{baseUrl}/info";
+        var mids = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        foreach (var dex in dexes)
+        {
+            object payload = string.IsNullOrWhiteSpace(dex.Dex)
+                ? new { type = "allMids" }
+                : new { type = "allMids", dex = dex.Dex };
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+            };
+
+            using var resp = await _http.SendAsync(req, cancellationToken);
+            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.Warn("SymbolSync", $"Hyperliquid allMids failed dex={dex.Dex ?? "default"} status={(int)resp.StatusCode}, body={Trim(body)}");
+                continue;
+            }
+
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (prop.Value.ValueKind == JsonValueKind.String &&
+                    decimal.TryParse(prop.Value.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed) &&
+                    parsed > 0)
+                {
+                    mids[prop.Name.Trim()] = parsed;
+                    continue;
+                }
+
+                if (prop.Value.ValueKind == JsonValueKind.Number &&
+                    prop.Value.TryGetDecimal(out var numeric) &&
+                    numeric > 0)
+                {
+                    mids[prop.Name.Trim()] = numeric;
+                }
             }
         }
 
         return mids;
+    }
+
+    private static string? InferHyperliquidDexName(IReadOnlyList<string> symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            var colonIndex = symbol.IndexOf(':');
+            if (colonIndex > 0)
+            {
+                return symbol[..colonIndex].Trim().ToLowerInvariant();
+            }
+
+            return null;
+        }
+
+        return null;
+    }
+
+    private static string NormalizeHyperliquidBaseAsset(string symbol)
+    {
+        var token = symbol.Trim().ToUpperInvariant();
+        var colonIndex = token.LastIndexOf(':');
+        if (colonIndex >= 0 && colonIndex < token.Length - 1)
+        {
+            token = token[(colonIndex + 1)..];
+        }
+
+        return token == "XBT" ? "BTC" : token;
     }
 
     private static readonly HashSet<string> AllowedBitMexQuotes =
@@ -503,12 +567,18 @@ public sealed class SymbolCatalogSyncService
         }
 
         var s = symbol.Trim().ToUpperInvariant();
-        if (s.Length < 2 || s.Length > 24)
+        if (s.Length < 1 || s.Length > 48)
         {
             return false;
         }
 
-        return s.All(ch => char.IsLetterOrDigit(ch));
+        if (s.IndexOf(':') < 0)
+        {
+            return s.All(ch => char.IsLetterOrDigit(ch));
+        }
+
+        var parts = s.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length == 2 && parts.All(part => part.Length >= 1 && part.All(char.IsLetterOrDigit));
     }
 
     private static bool IsValidAsterSymbol(string symbol)

@@ -41,13 +41,17 @@ internal static class HeadlessRuntime
         var accountStore = new AccountStore(accountRepository);
         var venueFactory = new VenueFactory(logger);
         var symbolCatalogRepository = new SymbolCatalogRepository();
+        var aiAgentRunRepository = new AIAgentRunRepository();
+        var httpApiStateService = new HttpApiStateService();
         var retentionScheduler = new RetentionScheduler(new RetentionJob(), retentionDays: 365);
         var symbolCatalogSyncService = new SymbolCatalogSyncService(symbolCatalogRepository, logger);
         var tradingApiService = new TradingApiService(accountStore, venueFactory, symbolCatalogRepository, logger);
+        var aiAgentExecutionService = new AIAgentExecutionService(userPreferenceRepository, aiAgentRunRepository, httpApiStateService, tradingApiService, logger);
         var dashboardService = new DashboardService(accountStore.Accounts, tradingApiService, symbolCatalogRepository, logger);
         var localApiServer = new LocalApiServer(
             tradingApiService,
             dashboardService,
+            aiAgentExecutionService,
             logger,
             reason =>
             {
@@ -56,6 +60,7 @@ internal static class HeadlessRuntime
             });
 
         retentionScheduler.Start();
+        aiAgentExecutionService.Start();
 
         _ = Task.Run(async () =>
         {
@@ -88,7 +93,7 @@ internal static class HeadlessRuntime
         finally
         {
             shutdownCts.Cancel();
-            await DisposeWithTimeoutAsync(localApiServer, tradingApiService, dashboardService, retentionScheduler, logger);
+            await DisposeWithTimeoutAsync(localApiServer, tradingApiService, dashboardService, aiAgentExecutionService, retentionScheduler, logger);
         }
     }
 
@@ -153,6 +158,7 @@ internal static class HeadlessRuntime
         LocalApiServer localApiServer,
         TradingApiService tradingApiService,
         DashboardService dashboardService,
+        AIAgentExecutionService aiAgentExecutionService,
         RetentionScheduler retentionScheduler,
         AppLogger logger)
     {
@@ -161,7 +167,8 @@ internal static class HeadlessRuntime
             var apiDisposeTask = localApiServer.DisposeAsync().AsTask();
             var tradingDisposeTask = tradingApiService.DisposeAsync().AsTask();
             var dashboardRuntimeDisposeTask = dashboardService.DisposeAsync().AsTask();
-            var allDisposeTask = Task.WhenAll(apiDisposeTask, tradingDisposeTask, dashboardRuntimeDisposeTask);
+            var aiAgentDisposeTask = aiAgentExecutionService.DisposeAsync().AsTask();
+            var allDisposeTask = Task.WhenAll(apiDisposeTask, tradingDisposeTask, dashboardRuntimeDisposeTask, aiAgentDisposeTask);
             var completed = await Task.WhenAny(allDisposeTask, Task.Delay(TimeSpan.FromSeconds(5))) == allDisposeTask;
             retentionScheduler.Dispose();
 

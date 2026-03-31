@@ -2,6 +2,7 @@ using AiyoPerps.Data;
 using AiyoPerps.Services;
 using Microsoft.EntityFrameworkCore;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -30,7 +31,7 @@ public sealed class AIAgentExecutionServiceTests
             30);
 
         scope.Preferences.SaveAIAgentSettings(settings);
-        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, scope.Logger);
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
         service.Start();
 
         var result = await service.RunNowAsync();
@@ -63,7 +64,7 @@ public sealed class AIAgentExecutionServiceTests
             string.Empty,
             30);
 
-        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, scope.Logger);
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
         service.SaveSettings(settings);
         service.Start();
 
@@ -72,6 +73,61 @@ public sealed class AIAgentExecutionServiceTests
         Assert.Equal(AIAgentExecutionService.StatusSuccess, result.Status);
         Assert.Contains("中文輸出", result.Stdout, StringComparison.Ordinal);
         Assert.Contains("中文錯誤", result.Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunNowAsync_AllowsZeroWakeIntervalForManualExecution()
+    {
+        using var scope = TestScope.Create();
+        var settings = new AIAgentSettings(
+            true,
+            "custom",
+            0,
+            "Write-Output 'manual ok'",
+            "Prompt",
+            AppContext.BaseDirectory,
+            string.Empty,
+            30);
+
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
+        service.SaveSettings(settings);
+        service.Start();
+
+        var result = await service.RunNowAsync();
+
+        Assert.Equal(AIAgentExecutionService.StatusSuccess, result.Status);
+        Assert.Contains("manual ok", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, service.GetSettings().WakeIntervalMinutes);
+    }
+
+    [Fact]
+    public async Task SaveSettings_PersistsWakeConditions()
+    {
+        using var scope = TestScope.Create();
+        var settings = new AIAgentSettings(
+            true,
+            "custom",
+            0,
+            "Write-Output 'ok'",
+            "Prompt",
+            AppContext.BaseDirectory,
+            string.Empty,
+            30,
+            [
+                new AIAgentWakeCondition("price-btc", true, null, "BTC", AIAgentWakeMetric.Price, AIAgentWakeComparison.GreaterThan, 70000m),
+                new AIAgentWakeCondition("pnl-eth", true, Guid.NewGuid(), "ETH-USDT", AIAgentWakeMetric.UnrealizedPnlPct, AIAgentWakeComparison.LessThan, -5m)
+            ]);
+
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
+        service.SaveSettings(settings);
+
+        var actual = service.GetSettings();
+
+        Assert.Equal(2, actual.WakeConditions?.Length);
+        Assert.Equal("price-btc", actual.WakeConditions![0].ConditionId);
+        Assert.Equal(AIAgentWakeMetric.Price, actual.WakeConditions[0].Metric);
+        Assert.Equal(AIAgentWakeComparison.GreaterThan, actual.WakeConditions[0].Comparison);
+        Assert.Equal("ETH-USDT", actual.WakeConditions[1].Symbol);
     }
 
     [Fact]
@@ -88,7 +144,7 @@ public sealed class AIAgentExecutionServiceTests
             string.Empty,
             30);
 
-        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, scope.Logger);
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
         service.SaveSettings(settings);
         service.Start();
 
@@ -123,7 +179,7 @@ public sealed class AIAgentExecutionServiceTests
         var before = db.AIAgentRuns.AsNoTracking().Single(x => x.RunId == "dangling-run");
         Assert.Equal(AIAgentExecutionService.StatusRunning, before.Status);
 
-        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, scope.Logger);
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
         service.Start();
 
         var after = scope.RunRepository.Find("dangling-run");
@@ -147,7 +203,7 @@ public sealed class AIAgentExecutionServiceTests
             string.Empty,
             30);
 
-        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, scope.Logger);
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
         service.SaveSettings(settings);
         service.Start();
 
@@ -188,7 +244,7 @@ public sealed class AIAgentExecutionServiceTests
             "new",
             string.Empty));
 
-        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, scope.Logger);
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
 
         service.DeleteRun("run-new");
 
@@ -226,7 +282,7 @@ public sealed class AIAgentExecutionServiceTests
             "b",
             "err"));
 
-        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, scope.Logger);
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
 
         service.ClearRunHistory();
 
@@ -249,7 +305,7 @@ public sealed class AIAgentExecutionServiceTests
             30);
 
         scope.HttpApiState.MarkInitializing(5078);
-        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, scope.Logger);
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
         service.SaveSettings(settings);
         service.Start();
 
@@ -280,7 +336,7 @@ public sealed class AIAgentExecutionServiceTests
             string.Empty,
             30);
 
-        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, scope.Logger);
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
         service.SaveSettings(settings);
         service.Start();
 
@@ -309,7 +365,7 @@ public sealed class AIAgentExecutionServiceTests
             string.Empty,
             30);
 
-        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, scope.Logger);
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
         service.SaveSettings(settings);
         service.Start();
 
@@ -328,6 +384,100 @@ public sealed class AIAgentExecutionServiceTests
         Assert.Single(scope.RunRepository.ListRecent());
     }
 
+    [Fact]
+    public async Task ExecuteAsync_ConditionTriggerSkipsWhenAnotherRunIsAlreadyInProgress()
+    {
+        using var scope = TestScope.Create();
+        var settings = new AIAgentSettings(
+            true,
+            "custom",
+            0,
+            "Start-Sleep -Seconds 1; Write-Output 'done'",
+            "Prompt",
+            AppContext.BaseDirectory,
+            string.Empty,
+            30,
+            [new AIAgentWakeCondition("price-btc", true, null, "BTC", AIAgentWakeMetric.Price, AIAgentWakeComparison.GreaterThan, 70000m)]);
+
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
+        service.SaveSettings(settings);
+        service.Start();
+
+        var firstRunTask = service.RunNowAsync();
+        await Task.Delay(150);
+        var currentRun = service.CurrentRun;
+        Assert.NotNull(currentRun);
+
+        var skipped = await InvokeExecuteAsync(service, settings, "condition");
+
+        Assert.Equal(currentRun!.RunId, skipped.RunId);
+        Assert.Equal(AIAgentExecutionService.StatusRunning, skipped.Status);
+
+        var completed = await firstRunTask;
+        Assert.Equal(AIAgentExecutionService.StatusSuccess, completed.Status);
+        Assert.Single(scope.RunRepository.ListRecent());
+    }
+
+    [Fact]
+    public async Task SchedulerLoop_ConditionStillMetAfterRun_TriggersImmediateFollowUpRun()
+    {
+        using var scope = TestScope.Create();
+        var settings = new AIAgentSettings(
+            true,
+            "custom",
+            0,
+            "Write-Output 'done'",
+            "Prompt",
+            AppContext.BaseDirectory,
+            string.Empty,
+            30,
+            [new AIAgentWakeCondition("price-btc", true, null, "BTC", AIAgentWakeMetric.Price, AIAgentWakeComparison.GreaterThan, 70000m)]);
+        var evaluationCount = 0;
+
+        static IReadOnlyDictionary<string, bool> CreateStates(bool isMet)
+            => new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["price-btc"] = isMet
+            };
+
+        Task<IReadOnlyDictionary<string, bool>> EvaluateAsync(IReadOnlyList<AIAgentWakeCondition> conditions, CancellationToken cancellationToken)
+        {
+            var current = Interlocked.Increment(ref evaluationCount);
+            return Task.FromResult<IReadOnlyDictionary<string, bool>>(CreateStates(current <= 2));
+        }
+
+        await using var service = new AIAgentExecutionService(
+            scope.Preferences,
+            scope.RunRepository,
+            scope.HttpApiState,
+            trading: null,
+            scope.Logger,
+            EvaluateAsync);
+        service.SaveSettings(settings);
+        service.Start();
+
+        var manualRun = await service.RunNowAsync();
+
+        Assert.Equal(AIAgentExecutionService.StatusSuccess, manualRun.Status);
+        await WaitUntilAsync(
+            () =>
+            {
+                var currentRuns = scope.RunRepository.ListRecent(10)
+                    .OrderBy(x => x.StartedAt)
+                    .ToArray();
+                return currentRuns.Length >= 3 &&
+                    currentRuns.Take(3).All(x => string.Equals(x.Status, AIAgentExecutionService.StatusSuccess, StringComparison.OrdinalIgnoreCase));
+            },
+            TimeSpan.FromSeconds(5));
+
+        var runs = scope.RunRepository.ListRecent(10)
+            .OrderBy(x => x.StartedAt)
+            .ToArray();
+
+        Assert.Equal(3, runs.Length);
+        Assert.All(runs, run => Assert.Equal(AIAgentExecutionService.StatusSuccess, run.Status));
+    }
+
     private static Task<AIAgentRunRecord> InvokeExecuteAsync(AIAgentExecutionService service, AIAgentSettings settings, string trigger)
     {
         var method = typeof(AIAgentExecutionService).GetMethod("ExecuteAsync", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -335,6 +485,20 @@ public sealed class AIAgentExecutionServiceTests
         var task = method!.Invoke(service, [settings, trigger, CancellationToken.None]) as Task<AIAgentRunRecord>;
         Assert.NotNull(task);
         return task!;
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var startedAt = DateTimeOffset.UtcNow;
+        while (!condition())
+        {
+            if (DateTimeOffset.UtcNow - startedAt > timeout)
+            {
+                throw new TimeoutException("Condition was not satisfied within the allotted time.");
+            }
+
+            await Task.Delay(50);
+        }
     }
 
     private sealed class TestScope : IDisposable

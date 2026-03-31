@@ -681,6 +681,42 @@
   <data name="Agent_WakeIntervalFormat" xml:space="preserve">
     <value>每 {0} 分鐘</value>
   </data>
+  <data name="Agent_WakeIntervalDisabled" xml:space="preserve">
+    <value>已停用定時喚醒</value>
+  </data>
+  <data name="Agent_WakeIntervalWithConditionsFormat" xml:space="preserve">
+    <value>{0}，條件喚醒 {1} 筆</value>
+  </data>
+  <data name="Agent_WakeIntervalHint" xml:space="preserve">
+    <value>輸入 0 可停用定時喚醒，只保留條件喚醒。</value>
+  </data>
+  <data name="Agent_WakeConditions" xml:space="preserve">
+    <value>條件喚醒</value>
+  </data>
+  <data name="Agent_WakeConditionsHint" xml:space="preserve">
+    <value>可設定多筆持倉條件。任一啟用條件從未成立轉為成立時，就會喚醒 AI Agent。</value>
+  </data>
+  <data name="Agent_AddWakeCondition" xml:space="preserve">
+    <value>新增條件</value>
+  </data>
+  <data name="Agent_WakeConditionAllAccounts" xml:space="preserve">
+    <value>所有啟用帳號</value>
+  </data>
+  <data name="Agent_WakeConditionSymbol" xml:space="preserve">
+    <value>Symbol，例如 BTC 或 BTC-USDT</value>
+  </data>
+  <data name="Agent_WakeMetricPrice" xml:space="preserve">
+    <value>價格</value>
+  </data>
+  <data name="Agent_WakeMetricUnrealizedPnlPct" xml:space="preserve">
+    <value>未實現損益%</value>
+  </data>
+  <data name="Agent_WakeComparisonGreaterThan" xml:space="preserve">
+    <value>大於</value>
+  </data>
+  <data name="Agent_WakeComparisonLessThan" xml:space="preserve">
+    <value>小於</value>
+  </data>
   <data name="Agent_LastRun" xml:space="preserve">
     <value>最後執行</value>
   </data>

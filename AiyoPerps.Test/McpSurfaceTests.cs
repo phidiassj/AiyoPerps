@@ -88,6 +88,8 @@ public sealed class McpSurfaceTests
         Assert.Contains("dashboard_status_get", toolNames);
         Assert.Contains("dashboard_config_set", toolNames);
         Assert.Contains("dashboard_snapshot_get", toolNames);
+        Assert.Contains("ai_agent_settings_get", toolNames);
+        Assert.Contains("ai_agent_settings_set", toolNames);
         Assert.DoesNotContain("dashboard_market_info_refresh", toolNames);
         Assert.DoesNotContain("dashboard_market_info_set_enabled", toolNames);
     }
@@ -100,8 +102,9 @@ public sealed class McpSurfaceTests
         var accountStore = new AccountStore(repository);
         var symbols = new SymbolCatalogRepository();
         var trading = new TradingApiService(accountStore, new SnapshotVenueFactory(), symbols, logger);
+        await using var aiService = new AIAgentExecutionService(new UserPreferenceRepository(), new AIAgentRunRepository(), new HttpApiStateService(), trading, logger);
         await using var dashboard = new DashboardService(accountStore.Accounts, trading, symbols, logger);
-        await using var server = new LocalApiServer(trading, dashboard, logger);
+        await using var server = new LocalApiServer(trading, dashboard, aiService, logger);
         var openedEvents = 0;
         trading.ConnectionOpened += _ => openedEvents++;
 

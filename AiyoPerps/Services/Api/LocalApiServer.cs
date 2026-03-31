@@ -31,6 +31,7 @@ public sealed class LocalApiServer : IAsyncDisposable
 
     private readonly TradingApiService _trading;
     private readonly DashboardService _dashboard;
+    private readonly AIAgentExecutionService _aiAgentExecutionService;
     private readonly ApiOperationStore _operations = new();
     private readonly AppLogger _logger;
     private readonly Func<string, Task>? _requestShutdown;
@@ -41,10 +42,11 @@ public sealed class LocalApiServer : IAsyncDisposable
     private IReadOnlyList<Ipv4Subnet> _allowedWslSubnets = [];
     private HashSet<string> _localIpv4Hosts = new(StringComparer.OrdinalIgnoreCase);
 
-    public LocalApiServer(TradingApiService trading, DashboardService dashboard, AppLogger logger, Func<string, Task>? requestShutdown = null)
+    public LocalApiServer(TradingApiService trading, DashboardService dashboard, AIAgentExecutionService aiAgentExecutionService, AppLogger logger, Func<string, Task>? requestShutdown = null)
     {
         _trading = trading;
         _dashboard = dashboard;
+        _aiAgentExecutionService = aiAgentExecutionService;
         _logger = logger;
         _requestShutdown = requestShutdown;
     }
@@ -268,6 +270,14 @@ public sealed class LocalApiServer : IAsyncDisposable
 
         app.MapPost("/api/v1/dashboard/cancel-order", (ApiCancelOrderRequest request) =>
             QueueOperation("dashboard-cancel-order", async ct => await _dashboard.CancelOrderAsync(request, ct)));
+
+        app.MapGet("/api/v1/ai-agent/settings", () => Results.Ok(_aiAgentExecutionService.GetSettings()));
+
+        app.MapPut("/api/v1/ai-agent/settings", (AIAgentSettings request) =>
+        {
+            _aiAgentExecutionService.SaveSettings(request);
+            return Results.Ok(_aiAgentExecutionService.GetSettings());
+        });
 
         app.MapPost("/api/v1/app/shutdown", () =>
         {
@@ -596,6 +606,8 @@ public sealed class LocalApiServer : IAsyncDisposable
             "dashboard_config_get" => _dashboard.GetConfiguration(),
             "dashboard_config_set" => await _dashboard.UpdateConfigurationAsync(ToDashboardConfiguration(Read<ApiDashboardConfigurationRequest>(args)), cancellationToken),
             "dashboard_snapshot_get" => _dashboard.GetSnapshot(),
+            "ai_agent_settings_get" => _aiAgentExecutionService.GetSettings(),
+            "ai_agent_settings_set" => SaveAIAgentSettings(Read<AIAgentSettings>(args)),
             "dashboard_start" => QueueMcpOperation("dashboard-start", async ct => await _dashboard.StartAsync(ct)),
             "dashboard_stop" => QueueMcpOperation("dashboard-stop", async ct => await _dashboard.StopAsync(ct)),
             "dashboard_refresh" => QueueMcpOperation("dashboard-refresh", async ct => await _dashboard.RefreshAsync(ct)),
@@ -651,6 +663,12 @@ public sealed class LocalApiServer : IAsyncDisposable
             createdAt = op.CreatedAt,
             statusUrl = $"/api/v1/operations/{op.OperationId}"
         };
+    }
+
+    private object SaveAIAgentSettings(AIAgentSettings settings)
+    {
+        _aiAgentExecutionService.SaveSettings(settings);
+        return _aiAgentExecutionService.GetSettings();
     }
 
     private object RequestShutdownFromTool()
@@ -711,11 +729,14 @@ public sealed class LocalApiServer : IAsyncDisposable
             request.ShowTestnet);
     }
 
+    private const string PortfolioReadGuidance = "For portfolio-wide reads, call accounts_list first, then call this tool once per accountId. Omit symbol to read all rows. This tool does not require dashboard_start and does not open adapter tabs.";
+    private const string DashboardMutationGuidance = "This is an async mutating tool. After calling it, poll operations_get until the status is Succeeded or Failed, then re-read positions_list and orders_list or refresh dashboard state to verify the result.";
+
     private static object[] BuildMcpTools()
     {
         return
         [
-            Tool("accounts_list", "List all configured accounts.", ObjectSchema()),
+            Tool("accounts_list", "List all configured accounts. For portfolio-wide automation, call this first, then use positions_list and orders_list for each returned accountId.", ObjectSchema()),
             Tool("accounts_get", "Get one account by accountId.", ObjectSchema(
                 new Dictionary<string, object?>
                 {
@@ -802,11 +823,38 @@ public sealed class LocalApiServer : IAsyncDisposable
                     ["showTestnet"] = BooleanSchema("Whether dashboard options include testnet accounts.")
                 },
                 "selectedAccountIds", "interval", "showTestnet")),
-            Tool("dashboard_snapshot_get", "Get the latest dashboard snapshot.", ObjectSchema()),
+            Tool("dashboard_snapshot_get", "Get the latest dashboard snapshot. This returns the current dashboard runtime cache and does not fetch live account state by itself. Start dashboard runtime first when you need integrated dashboard rows.", ObjectSchema()),
+            Tool("ai_agent_settings_get", "Get current AI agent execution settings, including timed wake interval and threshold-based wake conditions.", ObjectSchema()),
+            Tool("ai_agent_settings_set", "Replace AI agent execution settings. Use wakeConditions to define price or unrealizedPnlPct triggers. Any enabled wake condition can wake the agent when its threshold is crossed for a matching position. These threshold checks use direct account reads and do not require dashboard_start.", ObjectSchema(
+                new Dictionary<string, object?>
+                {
+                    ["isEnabled"] = BooleanSchema("Whether the AI agent scheduler is enabled."),
+                    ["agentType"] = StringSchema("Agent type, for example codex, claude-code, gemini-cli, or custom.", allowedValues: ["codex", "claude-code", "gemini-cli", "custom"]),
+                    ["wakeIntervalMinutes"] = IntegerSchema("Timed wake interval in minutes. Use 0 to disable timed wake."),
+                    ["commandTemplate"] = StringSchema("Shell command template used to execute the agent."),
+                    ["promptTemplate"] = StringSchema("Prompt template rendered before execution."),
+                    ["workingDirectory"] = StringSchema("Working directory for the agent process."),
+                    ["environmentVariables"] = StringSchema("Optional KEY=VALUE lines passed to the process environment."),
+                    ["timeoutSeconds"] = IntegerSchema("Execution timeout in seconds."),
+                    ["wakeConditions"] = ArraySchema(
+                        "Wake conditions. The scheduler uses OR semantics: if any enabled condition crosses its threshold, the agent is woken.",
+                        ObjectSchema(
+                            new Dictionary<string, object?>
+                            {
+                                ["conditionId"] = StringSchema("Stable condition identifier. Optional; a new one is generated if omitted."),
+                                ["isEnabled"] = BooleanSchema("Whether this wake condition is enabled."),
+                                ["accountId"] = StringSchema("Optional account identifier (GUID). Omit to watch all enabled accounts.", format: "uuid"),
+                                ["symbol"] = StringSchema("Position symbol to watch, for example BTC or BTC-USDC."),
+                                ["metric"] = StringSchema("Watched metric.", allowedValues: ["price", "unrealizedPnlPct"]),
+                                ["comparison"] = StringSchema("Threshold comparison operator.", allowedValues: ["gt", "lt"]),
+                                ["threshold"] = NumberSchema("Threshold value.")
+                            }))
+                },
+                "isEnabled", "agentType", "wakeIntervalMinutes", "commandTemplate", "promptTemplate", "workingDirectory", "timeoutSeconds")),
             Tool("dashboard_start", "Start the dashboard runtime with the current configuration.", ObjectSchema()),
             Tool("dashboard_stop", "Stop the dashboard runtime and clear runtime data.", ObjectSchema()),
             Tool("dashboard_refresh", "Refresh the dashboard snapshot immediately.", ObjectSchema()),
-            Tool("dashboard_positions_open", "Open a dashboard position on the selected account row (async order operation).", ObjectSchema(
+            Tool("dashboard_positions_open", "Open a dashboard position on the selected account row (async order operation). " + DashboardMutationGuidance, ObjectSchema(
                 new Dictionary<string, object?>
                 {
                     ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
@@ -820,7 +868,7 @@ public sealed class LocalApiServer : IAsyncDisposable
                     ["limitPrice"] = NumberSchema("Required for limit orders.")
                 },
                 "accountId", "symbol", "side", "orderType", "leverage", "amount", "amountUnit")),
-            Tool("dashboard_positions_close", "Close a dashboard position by positionId (async order operation).", ObjectSchema(
+            Tool("dashboard_positions_close", "Close a dashboard position by positionId (async order operation). " + DashboardMutationGuidance, ObjectSchema(
                 new Dictionary<string, object?>
                 {
                     ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
@@ -829,7 +877,7 @@ public sealed class LocalApiServer : IAsyncDisposable
                     ["limitPrice"] = NumberSchema("Required for limit orders.")
                 },
                 "accountId", "positionId", "orderType")),
-            Tool("dashboard_orders_cancel", "Cancel a dashboard order by orderId (async operation).", ObjectSchema(
+            Tool("dashboard_orders_cancel", "Cancel a dashboard order by orderId (async operation). " + DashboardMutationGuidance, ObjectSchema(
                 new Dictionary<string, object?>
                 {
                     ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
@@ -855,28 +903,28 @@ public sealed class LocalApiServer : IAsyncDisposable
                     ["cursor"] = IntegerSchema("Optional cursor from a previous response.")
                 },
                 "accountId", "symbol")),
-            Tool("positions_list", "List active positions.", ObjectSchema(
+            Tool("positions_list", "List active positions. " + PortfolioReadGuidance, ObjectSchema(
                 new Dictionary<string, object?>
                 {
                     ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
                     ["symbol"] = StringSchema("Optional symbol filter.")
                 },
                 "accountId")),
-            Tool("orders_list", "List open orders (exchange open orders).", ObjectSchema(
+            Tool("orders_list", "List open orders (exchange open orders). " + PortfolioReadGuidance, ObjectSchema(
                 new Dictionary<string, object?>
                 {
                     ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
                     ["symbol"] = StringSchema("Optional symbol filter.")
                 },
                 "accountId")),
-            Tool("balances_list", "List balances.", ObjectSchema(
+            Tool("balances_list", "List balances. " + PortfolioReadGuidance, ObjectSchema(
                 new Dictionary<string, object?>
                 {
                     ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
                     ["symbol"] = StringSchema("Optional symbol filter.")
                 },
                 "accountId")),
-            Tool("positions_open", "Open position (async order operation).", ObjectSchema(
+            Tool("positions_open", "Open position (async order operation). " + DashboardMutationGuidance, ObjectSchema(
                 new Dictionary<string, object?>
                 {
                     ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
@@ -890,7 +938,7 @@ public sealed class LocalApiServer : IAsyncDisposable
                     ["limitPrice"] = NumberSchema("Required for limit orders.")
                 },
                 "accountId", "symbol", "side", "orderType", "leverage", "amount", "amountUnit")),
-            Tool("positions_close", "Close position by positionId (async order operation).", ObjectSchema(
+            Tool("positions_close", "Close position by positionId (async order operation). " + DashboardMutationGuidance, ObjectSchema(
                 new Dictionary<string, object?>
                 {
                     ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
@@ -899,7 +947,7 @@ public sealed class LocalApiServer : IAsyncDisposable
                     ["limitPrice"] = NumberSchema("Required for limit orders.")
                 },
                 "accountId", "positionId", "orderType")),
-            Tool("orders_cancel", "Cancel order by orderId (async operation).", ObjectSchema(
+            Tool("orders_cancel", "Cancel order by orderId (async operation). " + DashboardMutationGuidance, ObjectSchema(
                 new Dictionary<string, object?>
                 {
                     ["accountId"] = StringSchema("Account identifier (GUID).", format: "uuid"),
@@ -918,7 +966,7 @@ public sealed class LocalApiServer : IAsyncDisposable
                 },
                 "accountId", "symbol")),
             Tool("app_shutdown", "Request graceful app shutdown and resource release.", ObjectSchema()),
-            Tool("operations_get", "Query async operation status by operationId.", ObjectSchema(
+            Tool("operations_get", "Query async operation status by operationId. Use this after every mutating tool until the status becomes Succeeded or Failed.", ObjectSchema(
                 new Dictionary<string, object?>
                 {
                     ["operationId"] = StringSchema("Operation identifier.")
@@ -996,6 +1044,16 @@ public sealed class LocalApiServer : IAsyncDisposable
             ["properties"] = properties ?? new Dictionary<string, object?>(),
             ["required"] = required ?? [],
             ["additionalProperties"] = true
+        };
+    }
+
+    private static object ArraySchema(string description, object items)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["type"] = "array",
+            ["description"] = description,
+            ["items"] = items
         };
     }
 

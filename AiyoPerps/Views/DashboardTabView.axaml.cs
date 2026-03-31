@@ -56,7 +56,7 @@ public partial class DashboardTabView : UserControl
 
         var settingsWindow = new AIAgentSettingWindow
         {
-            DataContext = new AIAgentSettingViewModel(App.AIAgentExecutionService, App.ToastService, App.Logger)
+            DataContext = new AIAgentSettingViewModel(App.AIAgentExecutionService, App.TradingApiService, App.DashboardService, App.ToastService, App.Logger)
         };
         if (window is not null)
         {

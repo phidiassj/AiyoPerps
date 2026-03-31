@@ -102,7 +102,10 @@ public static class SymbolCanonicalizer
 
         if (string.IsNullOrWhiteSpace(baseAsset))
         {
-            baseAsset = NormalizeAsset(normalizedRaw);
+            var colonIndex = normalizedRaw.LastIndexOf(':');
+            baseAsset = NormalizeAsset(colonIndex >= 0 && colonIndex < normalizedRaw.Length - 1
+                ? normalizedRaw[(colonIndex + 1)..]
+                : normalizedRaw);
         }
 
         if (string.IsNullOrWhiteSpace(quoteAsset))
@@ -153,6 +156,19 @@ public static class SymbolCanonicalizer
                     NormalizeAsset(parts[1]),
                     NormalizeAsset(parts[1]),
                     parts.Length >= 3 ? NormalizeContractType(parts[2]) : "PERP");
+            }
+        }
+
+        if (normalizedRaw.IndexOf(':') >= 0)
+        {
+            var colonIndex = normalizedRaw.LastIndexOf(':');
+            if (colonIndex >= 0 && colonIndex < normalizedRaw.Length - 1)
+            {
+                return (
+                    NormalizeAsset(normalizedRaw[(colonIndex + 1)..]),
+                    "USDC",
+                    "USDC",
+                    "PERP");
             }
         }
 

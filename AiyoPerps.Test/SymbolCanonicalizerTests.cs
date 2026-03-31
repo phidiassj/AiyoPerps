@@ -42,4 +42,22 @@ public sealed class SymbolCanonicalizerTests
         Assert.Equal("USD", descriptor.QuoteAsset);
         Assert.Equal("BTC", descriptor.SettleAsset);
     }
+
+    [Fact]
+    public void Format_HyperliquidBuilderPerp_ReturnsUnderlyingDisplay()
+    {
+        var actual = SymbolCanonicalizer.Format("Hyperliquid", "xyz:MU");
+
+        Assert.Equal("MU-USDC", actual);
+    }
+
+    [Fact]
+    public void Describe_HyperliquidBuilderPerp_NormalizesUnderlyingCanonicalKey()
+    {
+        var descriptor = SymbolCanonicalizer.Describe("Hyperliquid", "xyz:MU");
+
+        Assert.Equal("MU", descriptor.BaseAsset);
+        Assert.Equal("USDC", descriptor.QuoteAsset);
+        Assert.Equal("PERP:MU:USDC:USDC", descriptor.CanonicalKey);
+    }
 }

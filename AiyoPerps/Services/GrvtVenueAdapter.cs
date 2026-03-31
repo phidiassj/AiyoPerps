@@ -868,7 +868,7 @@ public sealed class GrvtVenueAdapter : IPerpVenue, IHistoricalCandleProvider, IA
                 notional = Math.Abs(qty) * mark;
             }
 
-            var pct = notional > 0 ? (unreal / notional) * 100m : 0m;
+            var pct = PositionPnlMath.ComputeUnrealizedPnlPct(notional, unreal);
             rows.Add(new VenuePosition(
                 NormalizeSymbol(symbol),
                 qty,

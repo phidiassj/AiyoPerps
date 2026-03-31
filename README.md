@@ -1,6 +1,6 @@
 # AiyoPerps
 
-[繁體中文](./Readme_zh.md)
+### [**繁體中文**](./Readme_zh.md) | [**Official Website**](https://perps.aiyo.app)
 
 AiyoPerps is a perpetual futures desktop terminal that supports both CEX (centralized) and DEX (decentralized) trading. It provides a full desktop UI, an MCP server for AI agents, and a local REST API.<br>
 With AiyoPerps, you can trade crypto perpetual futures **manually**, **with AI collaboration**, or **fully driven by AI**.
@@ -21,6 +21,10 @@ Even if you don’t live in Taiwan, if your invoice wins, just let us know. We�
 - Added a feature to **automatically wake up the AI ​​Agent** at fixed intervals, supporting [Codex CLI](https://developers.openai.com/codex/cli), [Claude Code CLI](https://code.claude.com/docs/en/cli-reference), and [Gemini CLI](https://geminicli.com/).
 
 ![AI Agent Setting](./images/screen02_en.jpg)
+
+- A new conditional wake-up AI Agent has been added, which allows you to set the AI ​​Agent to be activated only when the market price or profit reaches a set condition.
+
+![Conditional wake up](./images/agentwakeup_en.jpg)
 
 ## 0. Latest update
 - CEX: [BitMEX](https://www.bitmex.com/)

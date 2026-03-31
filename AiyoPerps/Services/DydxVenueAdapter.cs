@@ -610,11 +610,12 @@ public sealed class DydxVenueAdapter : IPerpVenue, IHistoricalCandleProvider, IA
             {
                 var markPrice = marketMap.TryGetValue(position.Symbol, out var market) ? market.OraclePrice : 0m;
                 var notional = Math.Abs(position.Quantity) * (markPrice > 0 ? markPrice : position.EntryPrice);
-                var pnlPct = position.EntryPrice > 0 && markPrice > 0
-                    ? position.Quantity < 0
-                        ? ((position.EntryPrice - markPrice) / position.EntryPrice) * 100m
-                        : ((markPrice - position.EntryPrice) / position.EntryPrice) * 100m
-                    : 0m;
+                var pnlPct = PositionPnlMath.ComputeUnrealizedPnlPctOrDirectional(
+                    notional,
+                    position.UnrealizedPnlUsd,
+                    position.Quantity,
+                    position.EntryPrice,
+                    markPrice);
 
                 var row = new VenuePosition(
                     position.Symbol,

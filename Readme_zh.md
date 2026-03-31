@@ -1,6 +1,6 @@
 # AiyoPerps
 
-[English](./README.md)
+### [**English**](./README.md) | [**官方網站**](https://perps.aiyo.app)
 
 AiyoPerps 是一套同時支援 CEX (中心化) 與 DEX (去中心化) 的永續合約桌面交易終端，提供完整桌面 UI、給 AI Agent 使用的 MCP Server，以及本機 REST API。<br>
 你可以基於 AiyoPerps 實現 **手動**、**與 AI 協作**，或 **完全由 AI 操作** 加密貨幣永續合約交易。
@@ -21,6 +21,10 @@ AiyoPerps 是一套同時支援 CEX (中心化) 與 DEX (去中心化) 的永續
 - 新增**固定時間主動喚醒 AI Agent** 功能，支援 [Codex CLI](https://developers.openai.com/codex/cli)、[Claude Code CLI](https://code.claude.com/docs/zh-TW/cli-reference)、[Gemini CLI](https://geminicli.com/)。
 
 ![AI Agent Setting](./images/screen02_zh.jpg)
+
+- 新增**條件式喚醒** AI Agent，可以設定當合約價位或獲利到達設定條件時，才喚醒 AI Agent。
+
+![Conditional wake up](./images/agentwakeup_zh.jpg)
 
 ## 0. 支援的交易平台
 - CEX: [BitMEX](https://www.bitmex.com/)

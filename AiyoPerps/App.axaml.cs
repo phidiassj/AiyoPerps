@@ -30,13 +30,13 @@ public partial class App : Application
     public static SymbolCatalogRepository SymbolCatalogRepository { get; } = new();
     public static AIAgentRunRepository AIAgentRunRepository { get; } = new();
     public static HttpApiStateService HttpApiStateService { get; } = new();
-    public static AIAgentExecutionService AIAgentExecutionService { get; } = new(UserPreferenceRepository, AIAgentRunRepository, HttpApiStateService, Logger);
     public static SymbolCatalogSyncService SymbolCatalogSyncService { get; } = new(SymbolCatalogRepository, Logger);
     public static WorkspaceLayoutRepository WorkspaceLayoutRepository { get; } = new();
     public static RetentionScheduler RetentionScheduler { get; } = new(new RetentionJob(), retentionDays: 365);
     public static TradingApiService TradingApiService { get; } = new(AccountStore, VenueFactory, SymbolCatalogRepository, Logger);
+    public static AIAgentExecutionService AIAgentExecutionService { get; } = new(UserPreferenceRepository, AIAgentRunRepository, HttpApiStateService, TradingApiService, Logger);
     public static DashboardService DashboardService { get; } = new(AccountStore.Accounts, TradingApiService, SymbolCatalogRepository, Logger);
-    public static LocalApiServer LocalApiServer { get; } = new(TradingApiService, DashboardService, Logger, RequestShutdownAsync);
+    public static LocalApiServer LocalApiServer { get; } = new(TradingApiService, DashboardService, AIAgentExecutionService, Logger, RequestShutdownAsync);
 
     public override void Initialize()
     {

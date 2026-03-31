@@ -193,7 +193,7 @@ public partial class MainWindow : Window
 
         var settingsWindow = new Views.AIAgentSettingWindow
         {
-            DataContext = new ViewModels.AIAgentSettingViewModel(App.AIAgentExecutionService, App.ToastService, App.Logger)
+            DataContext = new ViewModels.AIAgentSettingViewModel(App.AIAgentExecutionService, App.TradingApiService, App.DashboardService, App.ToastService, App.Logger)
         };
 
         settingsWindow.Show(this);

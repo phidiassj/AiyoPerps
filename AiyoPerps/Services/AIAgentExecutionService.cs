@@ -1,3 +1,4 @@
+using AiyoPerps.Services.Api;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -18,17 +19,25 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
     public const string StatusTimeout = "Timeout";
     public const string StatusCanceled = "Canceled";
 
+    private static readonly TimeSpan DefaultConditionPollInterval = TimeSpan.FromSeconds(15);
+    private static readonly IReadOnlyDictionary<string, bool> EmptyConditionState = new Dictionary<string, bool>();
+
     private readonly UserPreferenceRepository _preferences;
     private readonly AIAgentRunRepository _runRepository;
     private readonly HttpApiStateService _httpApiStateService;
+    private readonly TradingApiService? _trading;
     private readonly AppLogger _logger;
+    private readonly Func<IReadOnlyList<AIAgentWakeCondition>, CancellationToken, Task<IReadOnlyDictionary<string, bool>>> _wakeConditionEvaluator;
     private readonly SemaphoreSlim _runGate = new(1, 1);
+    private readonly SemaphoreSlim _schedulerSignal = new(0, int.MaxValue);
     private readonly object _sync = new();
 
     private CancellationTokenSource? _schedulerCts;
     private Task? _schedulerTask;
     private bool _started;
     private bool _disposed;
+    private bool _pendingConditionRun;
+    private bool _pendingPostRunConditionCheck;
     private AIAgentSettings _settings;
     private AIAgentRunRecord? _currentRun;
     private AIAgentRunRecord? _lastRun;
@@ -37,14 +46,18 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
         UserPreferenceRepository preferences,
         AIAgentRunRepository runRepository,
         HttpApiStateService httpApiStateService,
-        AppLogger logger)
+        TradingApiService? trading,
+        AppLogger logger,
+        Func<IReadOnlyList<AIAgentWakeCondition>, CancellationToken, Task<IReadOnlyDictionary<string, bool>>>? wakeConditionEvaluator = null)
     {
         _preferences = preferences;
         _runRepository = runRepository;
         _httpApiStateService = httpApiStateService;
+        _trading = trading;
         _logger = logger;
-        _settings = _preferences.GetAIAgentSettingsOrDefault();
+        _settings = NormalizeSettings(_preferences.GetAIAgentSettingsOrDefault());
         _lastRun = _runRepository.ListRecent(1).FirstOrDefault();
+        _wakeConditionEvaluator = wakeConditionEvaluator ?? EvaluateWakeConditionsCoreAsync;
         _httpApiStateService.StateChanged += OnHttpApiStateChanged;
     }
 
@@ -92,6 +105,8 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
             }
 
             _started = true;
+            _pendingConditionRun = false;
+            _pendingPostRunConditionCheck = false;
             _runRepository.MarkDanglingRunsAsFailed("A previous AI agent run was interrupted before completion.");
             _lastRun = _runRepository.ListRecent(1).FirstOrDefault();
             RestartSchedulerUnsafe();
@@ -108,6 +123,8 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
         _settings = normalized;
         lock (_sync)
         {
+            _pendingConditionRun = false;
+            _pendingPostRunConditionCheck = false;
             if (_started)
             {
                 RestartSchedulerUnsafe();
@@ -167,6 +184,7 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
 
         _httpApiStateService.StateChanged -= OnHttpApiStateChanged;
         _runGate.Dispose();
+        _schedulerSignal.Dispose();
     }
 
     private void RestartSchedulerUnsafe()
@@ -176,7 +194,7 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
         _schedulerTask = null;
         _schedulerCts = null;
 
-        if (!_settings.IsEnabled || !CanRun(_settings))
+        if (!_settings.IsEnabled || !CanRun(_settings) || !HasAutoWakeSource(_settings))
         {
             return;
         }
@@ -188,14 +206,98 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
 
     private async Task SchedulerLoopAsync(CancellationToken cancellationToken)
     {
+        var lastConditionStates = EmptyConditionState;
+        var nextIntervalDueAt = GetNextIntervalDueAt(_settings, DateTimeOffset.UtcNow);
+        var wasRunning = IsRunning;
+
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                await Task.Delay(GetWakeInterval(_settings), cancellationToken);
+                var delay = GetSchedulerDelay(_settings, nextIntervalDueAt);
+                await WaitForSchedulerSignalAsync(delay, cancellationToken);
+
+                var settings = _settings;
+                var isRunning = IsRunning;
+                var justCompletedRun = ConsumePostRunConditionCheckPending(isRunning) || (wasRunning && !isRunning);
+                if (justCompletedRun)
+                {
+                    nextIntervalDueAt = GetNextIntervalDueAt(settings, DateTimeOffset.UtcNow);
+                }
+
+                wasRunning = isRunning;
+
+                var triggeredCondition = false;
+                var enabledConditions = GetEnabledWakeConditions(settings);
+                if (enabledConditions.Count > 0)
+                {
+                    var currentStates = await _wakeConditionEvaluator(enabledConditions, cancellationToken);
+                    triggeredCondition = TryDetectConditionEdge(enabledConditions, lastConditionStates, currentStates);
+                    var anyConditionMet = AnyConditionMet(currentStates);
+                    lastConditionStates = currentStates;
+
+                    if (triggeredCondition && isRunning)
+                    {
+                        lock (_sync)
+                        {
+                            _pendingConditionRun = true;
+                        }
+
+                        triggeredCondition = false;
+                    }
+
+                    if (!isRunning && justCompletedRun && anyConditionMet)
+                    {
+                        triggeredCondition = true;
+                    }
+                }
+                else
+                {
+                    lastConditionStates = EmptyConditionState;
+                }
+
+                if (!isRunning)
+                {
+                    lock (_sync)
+                    {
+                        if (_pendingConditionRun)
+                        {
+                            _pendingConditionRun = false;
+                            triggeredCondition = true;
+                        }
+                    }
+                }
+
+                if (triggeredCondition)
+                {
+                    try
+                    {
+                        await ExecuteAsync(settings, "condition", cancellationToken);
+                        nextIntervalDueAt = GetNextIntervalDueAt(_settings, DateTimeOffset.UtcNow);
+                        wasRunning = IsRunning;
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Error("AIAgent", "Condition-triggered run failed", ex);
+                    }
+
+                    continue;
+                }
+
+                if (!IsIntervalEnabled(settings) || isRunning || nextIntervalDueAt is null || DateTimeOffset.UtcNow < nextIntervalDueAt.Value)
+                {
+                    continue;
+                }
+
                 try
                 {
-                    await ExecuteAsync(_settings, "scheduled", cancellationToken);
+                    await ExecuteAsync(settings, "scheduled", cancellationToken);
+                    nextIntervalDueAt = GetNextIntervalDueAt(_settings, DateTimeOffset.UtcNow);
+                    wasRunning = IsRunning;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -204,6 +306,7 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
                 catch (Exception ex)
                 {
                     _logger.Error("AIAgent", "Scheduled run failed", ex);
+                    nextIntervalDueAt = GetNextIntervalDueAt(_settings, DateTimeOffset.UtcNow);
                 }
             }
         }
@@ -213,8 +316,66 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
         }
     }
 
-    private static TimeSpan GetWakeInterval(AIAgentSettings settings)
-        => TimeSpan.FromMinutes(Math.Max(1, settings.WakeIntervalMinutes));
+    private static TimeSpan GetSchedulerDelay(AIAgentSettings settings, DateTimeOffset? nextIntervalDueAt)
+    {
+        var delay = DefaultConditionPollInterval;
+        if (IsIntervalEnabled(settings) && nextIntervalDueAt is not null)
+        {
+            var untilInterval = nextIntervalDueAt.Value - DateTimeOffset.UtcNow;
+            if (untilInterval <= TimeSpan.Zero)
+            {
+                return TimeSpan.FromSeconds(1);
+            }
+
+            if (untilInterval < delay)
+            {
+                delay = untilInterval;
+            }
+        }
+
+        if (delay < TimeSpan.FromSeconds(1))
+        {
+            return TimeSpan.FromSeconds(1);
+        }
+
+        return delay;
+    }
+
+    private static bool IsIntervalEnabled(AIAgentSettings settings) => settings.WakeIntervalMinutes > 0;
+
+    private static DateTimeOffset? GetNextIntervalDueAt(AIAgentSettings settings, DateTimeOffset fromTime)
+        => IsIntervalEnabled(settings) ? fromTime.AddMinutes(settings.WakeIntervalMinutes) : null;
+
+    private static IReadOnlyList<AIAgentWakeCondition> GetEnabledWakeConditions(AIAgentSettings settings)
+        => settings.WakeConditions?
+            .Where(x => x.IsEnabled && !string.IsNullOrWhiteSpace(x.Symbol))
+            .ToArray()
+           ?? [];
+
+    private static bool HasAutoWakeSource(AIAgentSettings settings)
+        => IsIntervalEnabled(settings) || GetEnabledWakeConditions(settings).Count > 0;
+
+    private static bool TryDetectConditionEdge(
+        IReadOnlyList<AIAgentWakeCondition> conditions,
+        IReadOnlyDictionary<string, bool> previousStates,
+        IReadOnlyDictionary<string, bool> currentStates)
+    {
+        foreach (var condition in conditions)
+        {
+            var conditionId = condition.ConditionId;
+            var isMet = currentStates.TryGetValue(conditionId, out var currentMet) && currentMet;
+            var wasMet = previousStates.TryGetValue(conditionId, out var previousMet) && previousMet;
+            if (isMet && !wasMet)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool AnyConditionMet(IReadOnlyDictionary<string, bool> states)
+        => states.Values.Any(x => x);
 
     private async Task<AIAgentRunRecord> ExecuteAsync(AIAgentSettings settings, string trigger, CancellationToken cancellationToken)
     {
@@ -256,7 +417,12 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
             _lastRun = completedRecord;
             _currentRun = null;
             _runRepository.Upsert(completedRecord);
+            lock (_sync)
+            {
+                _pendingPostRunConditionCheck = true;
+            }
             RaiseStateChanged();
+            SignalScheduler();
             return completedRecord;
         }
         finally
@@ -272,9 +438,10 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
             return true;
         }
 
-        if (string.Equals(trigger, "scheduled", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(trigger, "scheduled", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trigger, "condition", StringComparison.OrdinalIgnoreCase))
         {
-            _logger.Info("AIAgent", "Scheduled run skipped because another AI agent run is already in progress.");
+            _logger.Info("AIAgent", $"Auto run skipped because another AI agent run is already in progress. trigger={trigger}");
             return false;
         }
 
@@ -388,6 +555,152 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
         };
     }
 
+    private async Task<IReadOnlyDictionary<string, bool>> EvaluateWakeConditionsCoreAsync(
+        IReadOnlyList<AIAgentWakeCondition> conditions,
+        CancellationToken cancellationToken)
+    {
+        if (_trading is null || conditions.Count == 0)
+        {
+            return EmptyConditionState;
+        }
+
+        var enabledAccounts = _trading.ListAccounts()
+            .Where(x => x.IsEnabled)
+            .ToArray();
+        if (enabledAccounts.Length == 0)
+        {
+            return EmptyConditionState;
+        }
+
+        var requiredAccountIds = new HashSet<Guid>(conditions.Where(x => x.AccountId is not null).Select(x => x.AccountId!.Value));
+        var conditionTargetsAllAccounts = conditions.Any(x => x.AccountId is null);
+        var targetAccounts = enabledAccounts
+            .Where(x => conditionTargetsAllAccounts || requiredAccountIds.Contains(x.AccountId))
+            .ToArray();
+
+        var positionsByAccount = new Dictionary<Guid, IReadOnlyList<ApiPositionDto>>();
+        foreach (var account in targetAccounts)
+        {
+            positionsByAccount[account.AccountId] = await _trading.ListPositionsAsync(
+                account.AccountId,
+                symbol: null,
+                cancellationToken,
+                notifyLifecycleEvents: false);
+        }
+
+        var states = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var condition in conditions)
+        {
+            var accounts = condition.AccountId is Guid accountId
+                ? targetAccounts.Where(x => x.AccountId == accountId)
+                : targetAccounts;
+
+            var isMet = false;
+            foreach (var account in accounts)
+            {
+                if (!positionsByAccount.TryGetValue(account.AccountId, out var positions))
+                {
+                    continue;
+                }
+
+                if (positions.Any(position => PositionMatchesCondition(account, position, condition)))
+                {
+                    isMet = true;
+                    break;
+                }
+            }
+
+            states[condition.ConditionId] = isMet;
+        }
+
+        return states;
+    }
+
+    private static bool PositionMatchesCondition(ApiAccountDto account, ApiPositionDto position, AIAgentWakeCondition condition)
+    {
+        if (!MatchesConditionSymbol(account.VenueId, position.Symbol, condition.Symbol))
+        {
+            return false;
+        }
+
+        var metric = AIAgentWakeMetric.Normalize(condition.Metric);
+        var comparison = AIAgentWakeComparison.Normalize(condition.Comparison);
+        var value = metric switch
+        {
+            AIAgentWakeMetric.UnrealizedPnlPct => position.UnrealizedPnlPct,
+            _ => position.MarkPrice
+        };
+
+        return comparison == AIAgentWakeComparison.LessThan
+            ? value < condition.Threshold
+            : value > condition.Threshold;
+    }
+
+    private static bool MatchesConditionSymbol(string venueId, string positionSymbol, string targetSymbol)
+    {
+        var normalizedTarget = NormalizeConditionSymbol(targetSymbol);
+        if (string.IsNullOrWhiteSpace(normalizedTarget))
+        {
+            return false;
+        }
+
+        var normalizedRaw = NormalizeConditionSymbol(positionSymbol);
+        if (string.Equals(normalizedTarget, normalizedRaw, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var formatted = NormalizeConditionSymbol(SymbolCanonicalizer.Format(venueId, positionSymbol));
+        return string.Equals(normalizedTarget, formatted, StringComparison.Ordinal);
+    }
+
+    private static string NormalizeConditionSymbol(string? value)
+        => (value ?? string.Empty).Trim().Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
+
+    private async Task WaitForSchedulerSignalAsync(TimeSpan delay, CancellationToken cancellationToken)
+    {
+        if (delay <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        var delayTask = Task.Delay(delay, cancellationToken);
+        var signalTask = _schedulerSignal.WaitAsync(cancellationToken);
+        var completedTask = await Task.WhenAny(delayTask, signalTask);
+        await completedTask;
+    }
+
+    private void SignalScheduler()
+    {
+        try
+        {
+            _schedulerSignal.Release();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Ignore shutdown races.
+        }
+    }
+
+    private bool ConsumePostRunConditionCheckPending(bool isRunning)
+    {
+        if (isRunning)
+        {
+            return false;
+        }
+
+        lock (_sync)
+        {
+            if (!_pendingPostRunConditionCheck)
+            {
+                return false;
+            }
+
+            _pendingPostRunConditionCheck = false;
+            return true;
+        }
+    }
+
     private static async Task<string> ReadAndKillProcessAsync(Process process, Task<string> stderrTask, string fallbackMessage)
     {
         try
@@ -463,11 +776,6 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
             throw new InvalidOperationException("AI Agent settings are incomplete.");
         }
 
-        if (settings.WakeIntervalMinutes <= 0)
-        {
-            throw new InvalidOperationException("Wake interval must be greater than zero.");
-        }
-
         if (settings.TimeoutSeconds < 10)
         {
             throw new InvalidOperationException("Timeout must be at least 10 seconds.");
@@ -486,15 +794,36 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
         var defaultSettings = AIAgentProfileCatalog.CreateDefault(normalizedAgentType);
         var normalizedWorkingDirectory = NormalizeWorkingDirectory(settings.WorkingDirectory);
         var normalizedCommandTemplate = NormalizeCommandTemplate(normalizedAgentType, settings.CommandTemplate);
+        var normalizedConditions = (settings.WakeConditions ?? [])
+            .Select(NormalizeWakeCondition)
+            .Where(x => !string.IsNullOrWhiteSpace(x.Symbol))
+            .ToArray();
+
         return settings with
         {
             AgentType = normalizedAgentType,
-            WakeIntervalMinutes = settings.WakeIntervalMinutes <= 0 ? defaultSettings.WakeIntervalMinutes : settings.WakeIntervalMinutes,
+            WakeIntervalMinutes = settings.WakeIntervalMinutes < 0 ? defaultSettings.WakeIntervalMinutes : settings.WakeIntervalMinutes,
             CommandTemplate = normalizedCommandTemplate,
             PromptTemplate = settings.PromptTemplate?.Trim() ?? string.Empty,
             WorkingDirectory = normalizedWorkingDirectory,
             EnvironmentVariables = settings.EnvironmentVariables ?? string.Empty,
-            TimeoutSeconds = settings.TimeoutSeconds < 10 ? defaultSettings.TimeoutSeconds : settings.TimeoutSeconds
+            TimeoutSeconds = settings.TimeoutSeconds < 10 ? defaultSettings.TimeoutSeconds : settings.TimeoutSeconds,
+            WakeConditions = normalizedConditions
+        };
+    }
+
+    private static AIAgentWakeCondition NormalizeWakeCondition(AIAgentWakeCondition condition)
+    {
+        var conditionId = string.IsNullOrWhiteSpace(condition.ConditionId)
+            ? Guid.NewGuid().ToString("N")
+            : condition.ConditionId.Trim();
+
+        return condition with
+        {
+            ConditionId = conditionId,
+            Symbol = condition.Symbol?.Trim() ?? string.Empty,
+            Metric = AIAgentWakeMetric.Normalize(condition.Metric),
+            Comparison = AIAgentWakeComparison.Normalize(condition.Comparison)
         };
     }
 
@@ -587,5 +916,9 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
         await _httpApiStateService.WaitForReadyOrInitializationExitAsync(cancellationToken);
     }
 
-    private void OnHttpApiStateChanged() => RaiseStateChanged();
+    private void OnHttpApiStateChanged()
+    {
+        RaiseStateChanged();
+        SignalScheduler();
+    }
 }

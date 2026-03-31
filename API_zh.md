@@ -23,6 +23,7 @@
 - agent 不應自行猜測 `accountId`、`symbol`、`positionId`、`orderId`；必須從 MCP 回傳取得。
 - user 若只要分析或建議，應在 prompt 明講不要執行交易。
 - user 若授權直接執行，agent 才應使用修改型 tools。
+- MCP `tools/list` 的說明目前已內嵌一版精簡的 baseline workflow，包含 portfolio-wide 讀取方式與非同步操作驗證流程，因此不需要在每次喚醒 prompt 都重複同樣說明。
 
 ### Dashboard MCP 常用 tools
 - `dashboard_status_get`：讀取 Dashboard runtime 狀態與資料筆數。
@@ -30,6 +31,8 @@
 - `dashboard_config_get`：讀取目前 Dashboard 設定。
 - `dashboard_config_set`：更新目前 Dashboard 設定。
 - `dashboard_snapshot_get`：讀取最新 Dashboard snapshot，包含市場列、持倉列、掛單列。
+- `ai_agent_settings_get`：讀取目前 AI Agent scheduler 設定，包含定時與條件喚醒規則。
+- `ai_agent_settings_set`：覆寫目前 AI Agent scheduler 設定，包含多筆 `price` / `unrealizedPnlPct` 條件喚醒。
 - `dashboard_start`：啟動 Dashboard runtime。
 - `dashboard_refresh`：立即刷新 Dashboard runtime。
 - `dashboard_stop`：停止 Dashboard runtime。
@@ -54,12 +57,14 @@
 6. 在 Dashboard runtime 有啟用時，呼叫 `dashboard_snapshot_get` 取得目前市場列、持倉、掛單。
 7. 視需要再用 `positions_list`、`orders_list`、`balances_list`、`market_snapshot` 做補充驗證。
 8. 若實際執行了下單、平倉或取消單，而且使用了 Dashboard runtime，完成後必須再 `dashboard_refresh`、再用 `operations_get` 等待，最後重新讀一次 `dashboard_snapshot_get` 驗證結果。
+9. 若 user 或 agent 需要以定時加門檻條件來自動喚醒 AI Agent，請使用 `ai_agent_settings_get` / `ai_agent_settings_set`。條件喚醒採 OR 語意，只要任一啟用條件跨過門檻就會喚醒 agent。
 
 ### 操作限制
 - `dashboard_positions_open` 可用來增加曝險或用反向單抵銷部分曝險，但它不是明確的 reduce-only partial-close API。
 - `dashboard_positions_close` 是既有持倉的全平操作。
 - MCP tool 呼叫不應依賴開啟 adapter workspace tab；agent 透過 MCP 進行讀取或操作時，不會以建立 UI tab 作為前提。
 - 左區塊市場訊息已不再由 app 提供 MCP 快取；agent 若需要外部市場消息，必須自行讀取檔案或上網蒐集。
+- AI Agent 的條件喚醒會用 direct account read 讀取 live positions，不需要先 `dashboard_start`。
 
 ## 2. Headless 與 HTTP 啟動
 ### 桌面版
@@ -337,6 +342,8 @@ Path 參數：
 - `dashboard_config_get`
 - `dashboard_config_set`
 - `dashboard_snapshot_get`
+- `ai_agent_settings_get`
+- `ai_agent_settings_set`
 - `dashboard_start`
 - `dashboard_stop`
 - `dashboard_refresh`
@@ -376,6 +383,8 @@ Path 參數：
 - `dashboard_config_get`：無參數
 - `dashboard_config_set`：同 `ApiDashboardConfigurationRequest`
 - `dashboard_snapshot_get`：無參數
+- `ai_agent_settings_get`：無參數
+- `ai_agent_settings_set`：同 `AIAgentSettings`，包含 `wakeConditions[]`
 - `dashboard_start`：無參數
 - `dashboard_stop`：無參數
 - `dashboard_refresh`：無參數
@@ -409,6 +418,8 @@ Path 參數：
 - `dashboard_config_get`
 - `dashboard_config_set`
 - `dashboard_snapshot_get`
+- `ai_agent_settings_get`
+- `ai_agent_settings_set`
 
 ## 4.3 Tool Schema 結構
 `tools/list` 目前會回傳完整 object schema，包含：

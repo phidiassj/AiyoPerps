@@ -8,7 +8,8 @@ public sealed record AIAgentSettings(
     string PromptTemplate,
     string WorkingDirectory,
     string EnvironmentVariables,
-    int TimeoutSeconds)
+    int TimeoutSeconds,
+    AIAgentWakeCondition[]? WakeConditions = null)
 {
     public static AIAgentSettings Default => AIAgentProfileCatalog.CreateDefault("codex");
 }

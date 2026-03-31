@@ -728,7 +728,7 @@ public sealed class AsterVenueAdapter : IPerpVenue, IHistoricalCandleProvider, I
                 notional = Math.Abs(qty) * mark;
             }
 
-            var pct = notional > 0 ? unrealized / notional * 100m : 0m;
+            var pct = PositionPnlMath.ComputeUnrealizedPnlPct(Math.Abs(notional), unrealized);
             rows.Add(new VenuePosition(
                 symbol,
                 qty,
@@ -869,7 +869,7 @@ public sealed class AsterVenueAdapter : IPerpVenue, IHistoricalCandleProvider, I
             }
 
             var notional = Math.Abs(qty) * (mark > 0m ? mark : entry);
-            var pct = notional > 0m ? unrealized / notional * 100m : 0m;
+            var pct = PositionPnlMath.ComputeUnrealizedPnlPct(notional, unrealized);
             rows.Add(new VenuePosition(
                 symbol,
                 qty,

@@ -1265,7 +1265,13 @@ public sealed class DashboardTabViewModel : ViewModelBase, IMainTabViewModel, ID
         var settings = _aiAgentExecutionService.GetSettings();
         AgentEnableState = settings.IsEnabled ? L["Agent_Enabled"] : L["Agent_Disabled"];
         AgentSelectedType = AIAgentProfileCatalog.ToDisplayName(settings.AgentType);
-        AgentWakeInterval = string.Format(CultureInfo.CurrentCulture, L["Agent_WakeIntervalFormat"], settings.WakeIntervalMinutes);
+        var wakeIntervalText = settings.WakeIntervalMinutes > 0
+            ? string.Format(CultureInfo.CurrentCulture, L["Agent_WakeIntervalFormat"], settings.WakeIntervalMinutes)
+            : L["Agent_WakeIntervalDisabled"];
+        var wakeConditionCount = settings.WakeConditions?.Count(x => x.IsEnabled && !string.IsNullOrWhiteSpace(x.Symbol)) ?? 0;
+        AgentWakeInterval = wakeConditionCount > 0
+            ? string.Format(CultureInfo.CurrentCulture, L["Agent_WakeIntervalWithConditionsFormat"], wakeIntervalText, wakeConditionCount)
+            : wakeIntervalText;
 
         var lastRun = _aiAgentExecutionService.LastRun;
         AgentLastRunStatus = lastRun?.Status ?? L["Agent_NoRuns"];
