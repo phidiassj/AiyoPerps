@@ -281,6 +281,12 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
             var result = EvaluateExchangeResponse(body);
             if (!result.IsSuccess)
             {
+                if (IsIdempotentCancelRejection(result.Message))
+                {
+                    _logger.Info("Hyperliquid", $"CancelOrder treated as already closed orderId={orderId}, reason={result.Message}, body={Trim(body)}");
+                    return new OrderAck(DateTimeOffset.UtcNow, orderId, true, result.Message);
+                }
+
                 _logger.Warn("Hyperliquid", $"CancelOrder rejected orderId={orderId}, reason={result.Message}, body={Trim(body)}");
                 return new OrderAck(DateTimeOffset.UtcNow, orderId, false, result.Message);
             }
@@ -2445,6 +2451,22 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         {
             return (false, false, "invalid exchange response");
         }
+    }
+
+    private static bool IsIdempotentCancelRejection(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        var normalized = message.Trim();
+        return normalized.Contains("already canceled", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("already cancelled", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("already canceled, or filled", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("already cancelled, or filled", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("never placed, already canceled, or filled", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("never placed, already cancelled, or filled", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ReadJsonText(JsonElement element, string fallback)
