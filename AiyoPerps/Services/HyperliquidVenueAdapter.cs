@@ -314,6 +314,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                 return new OrderAck(DateTimeOffset.UtcNow, orderId, false, result.Message);
             }
 
+            RemoveOptimisticOpenOrder(orderId);
             _logger.Info("Hyperliquid", $"CancelOrder done orderId={orderId}, success=true, body={Trim(body)}");
             return new OrderAck(DateTimeOffset.UtcNow, orderId, true, "ok");
         }
@@ -420,6 +421,11 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                     : "order was not accepted by exchange";
                 _logger.Warn("Hyperliquid", $"PlaceOrder rejected success={result.IsSuccess}, accepted={result.HasAcceptedStatus}, reduceOnly={reduceOnly}, orderId={orderId}, reason={reason}, body={Trim(body)}");
                 return new OrderAck(DateTimeOffset.UtcNow, orderId, false, reason);
+            }
+
+            if (TryBuildOptimisticOpenOrder(coin, normalizedSize, normalizedPrice, orderId, body, reduceOnly, out var optimisticOrder))
+            {
+                UpsertOptimisticOpenOrder(optimisticOrder);
             }
 
             _logger.Info("Hyperliquid", $"PlaceOrder done success=true, reduceOnly={reduceOnly}, orderId={orderId}, body={Trim(body)}");
@@ -1652,6 +1658,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
             }
 
             await SendSubscribeAsync(_accountWs, new { type = "allDexsClearinghouseState", user = infoAddress }, _accountWsCts.Token);
+            await SendSubscribeAsync(_accountWs, new { type = "orderUpdates", user = infoAddress }, _accountWsCts.Token);
             foreach (var dex in _knownPerpDexes)
             {
                 object midsSubscription = string.IsNullOrWhiteSpace(dex)
@@ -1821,6 +1828,12 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
             return;
         }
 
+        if (string.Equals(channel, "orderUpdates", StringComparison.Ordinal))
+        {
+            ApplyOrderUpdates(dataElement);
+            return;
+        }
+
         if (string.Equals(channel, "allMids", StringComparison.Ordinal))
         {
             ApplyAllMidsSnapshot(dataElement);
@@ -1920,6 +1933,71 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
 
             _allMidsCache = next;
             _allMidsCacheAt = DateTimeOffset.UtcNow;
+        }
+    }
+
+    private void ApplyOrderUpdates(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        lock (_accountStateSync)
+        {
+            var next = _openOrdersCache.ToDictionary(x => x.OrderId ?? string.Empty, StringComparer.OrdinalIgnoreCase);
+            foreach (var item in data.EnumerateArray())
+            {
+                if (!item.TryGetProperty("order", out var orderElement) || orderElement.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var coin = ReadString(orderElement, "coin");
+                var orderId = ReadString(orderElement, "oid");
+                if (string.IsNullOrWhiteSpace(coin) || string.IsNullOrWhiteSpace(orderId))
+                {
+                    continue;
+                }
+
+                var normalizedCoin = NormalizeCoin(coin);
+                var normalizedStatus = NormalizeOrderUpdateStatus(ReadString(item, "status"));
+                if (IsInactiveOrderUpdateStatus(normalizedStatus))
+                {
+                    next.Remove(orderId);
+                    RemoveOpenOrderFromDexCache(orderId);
+                    continue;
+                }
+
+                if (!IsActiveOrderUpdateStatus(normalizedStatus))
+                {
+                    continue;
+                }
+
+                var size = Math.Abs(ReadDecimal(orderElement, "sz"));
+                if (size <= 0)
+                {
+                    size = Math.Abs(ReadDecimal(orderElement, "origSz"));
+                }
+
+                var limitPx = ReadDecimal(orderElement, "limitPx");
+                var notional = size > 0 && limitPx > 0 ? size * limitPx : size;
+                var order = new VenueOpenOrder(
+                    normalizedCoin,
+                    notional,
+                    0m,
+                    limitPx > 0 ? limitPx : null,
+                    string.IsNullOrWhiteSpace(normalizedStatus) ? "Open" : normalizedStatus,
+                    orderId);
+                next[orderId] = order;
+                UpsertOpenOrderInDexCache(order);
+            }
+
+            _openOrdersCache = next.Values
+                .OrderBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(x => x.OrderId, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            _accountOrdersWsAt = DateTimeOffset.UtcNow;
         }
     }
 
@@ -2059,6 +2137,161 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
     private static string NormalizeDexValue(string? dex)
     {
         return string.IsNullOrWhiteSpace(dex) ? string.Empty : dex.Trim().ToLowerInvariant();
+    }
+
+    private void UpsertOptimisticOpenOrder(VenueOpenOrder order)
+    {
+        lock (_accountStateSync)
+        {
+            UpsertOpenOrderInDexCache(order);
+            _accountOrdersWsAt = DateTimeOffset.UtcNow;
+        }
+    }
+
+    private void RemoveOptimisticOpenOrder(string? orderId)
+    {
+        if (string.IsNullOrWhiteSpace(orderId))
+        {
+            return;
+        }
+
+        lock (_accountStateSync)
+        {
+            _openOrdersCache = _openOrdersCache
+                .Where(x => !string.Equals(x.OrderId, orderId, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            RemoveOpenOrderFromDexCache(orderId);
+            _accountOrdersWsAt = DateTimeOffset.UtcNow;
+        }
+    }
+
+    private void UpsertOpenOrderInDexCache(VenueOpenOrder order)
+    {
+        var dexKey = NormalizeDexValue(ParseCoin(order.Symbol).Dex);
+        var rows = _openOrdersByDexCache.TryGetValue(dexKey, out var existing)
+            ? existing.ToList()
+            : [];
+        rows.RemoveAll(x => string.Equals(x.OrderId, order.OrderId, StringComparison.OrdinalIgnoreCase));
+        rows.Add(order);
+        _openOrdersByDexCache[dexKey] = rows;
+        _openOrdersCache = _openOrdersByDexCache.Values
+            .SelectMany(x => x)
+            .OrderBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.OrderId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private void RemoveOpenOrderFromDexCache(string? orderId)
+    {
+        if (string.IsNullOrWhiteSpace(orderId))
+        {
+            return;
+        }
+
+        foreach (var key in _openOrdersByDexCache.Keys.ToList())
+        {
+            var rows = _openOrdersByDexCache[key]
+                .Where(x => !string.Equals(x.OrderId, orderId, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            _openOrdersByDexCache[key] = rows;
+        }
+    }
+
+    private static string NormalizeOrderUpdateStatus(string? status)
+    {
+        return string.IsNullOrWhiteSpace(status) ? string.Empty : status.Trim();
+    }
+
+    private static bool IsActiveOrderUpdateStatus(string status)
+    {
+        if (string.IsNullOrWhiteSpace(status))
+        {
+            return false;
+        }
+
+        var normalized = status.ToLowerInvariant();
+        return normalized.Contains("open", StringComparison.Ordinal) ||
+               normalized.Contains("rest", StringComparison.Ordinal) ||
+               normalized.Contains("trigger", StringComparison.Ordinal) ||
+               normalized.Contains("active", StringComparison.Ordinal) ||
+               normalized.Contains("working", StringComparison.Ordinal);
+    }
+
+    private static bool IsInactiveOrderUpdateStatus(string status)
+    {
+        if (string.IsNullOrWhiteSpace(status))
+        {
+            return false;
+        }
+
+        var normalized = status.ToLowerInvariant();
+        return normalized.Contains("fill", StringComparison.Ordinal) ||
+               normalized.Contains("cancel", StringComparison.Ordinal) ||
+               normalized.Contains("reject", StringComparison.Ordinal) ||
+               normalized.Contains("fail", StringComparison.Ordinal) ||
+               normalized.Contains("error", StringComparison.Ordinal) ||
+               normalized.Contains("expire", StringComparison.Ordinal) ||
+               normalized.Contains("triggered", StringComparison.Ordinal) && normalized.Contains("cancel", StringComparison.Ordinal);
+    }
+
+    private static bool TryBuildOptimisticOpenOrder(
+        string coin,
+        decimal normalizedSize,
+        decimal normalizedPrice,
+        string orderId,
+        string body,
+        bool reduceOnly,
+        out VenueOpenOrder order)
+    {
+        order = default!;
+        if (reduceOnly || normalizedSize <= 0 || normalizedPrice <= 0 || string.IsNullOrWhiteSpace(orderId))
+        {
+            return false;
+        }
+
+        if (!ResponseContainsRestingOrder(body))
+        {
+            return false;
+        }
+
+        order = new VenueOpenOrder(
+            coin,
+            normalizedSize * normalizedPrice,
+            0m,
+            normalizedPrice,
+            "Open",
+            orderId);
+        return true;
+    }
+
+    private static bool ResponseContainsRestingOrder(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("response", out var responseElement) ||
+                !responseElement.TryGetProperty("data", out var dataElement) ||
+                !dataElement.TryGetProperty("statuses", out var statusesElement) ||
+                statusesElement.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            foreach (var statusElement in statusesElement.EnumerateArray())
+            {
+                if (statusElement.ValueKind == JsonValueKind.Object &&
+                    statusElement.TryGetProperty("resting", out _))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private async Task ReceiveLoopAsync(ClientWebSocket ws, CancellationToken cancellationToken)

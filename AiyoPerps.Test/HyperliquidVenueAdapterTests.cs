@@ -130,6 +130,73 @@ public sealed class HyperliquidVenueAdapterTests
         Assert.Equal(12.5m, perpUsd);
     }
 
+    [Fact]
+    public async Task ParseAccountStateMessage_ShouldApplyOrderUpdates()
+    {
+        const string snapshotMessage = """
+            {
+              "channel":"openOrders",
+              "data":{
+                "dex":"xyz",
+                "user":"0xabc",
+                "orders":[{"coin":"MU","oid":"366","sz":"0.5","limitPx":"340","status":"open"}]
+              }
+            }
+            """;
+        const string updateMessage = """
+            {
+              "channel":"orderUpdates",
+              "data":[
+                {
+                  "order":{"coin":"xyz:MU","oid":366,"limitPx":"340","sz":"0.5","origSz":"0.5"},
+                  "status":"filled",
+                  "statusTimestamp":1775042921179
+                },
+                {
+                  "order":{"coin":"BTC","oid":999,"limitPx":"65000","sz":"0.001","origSz":"0.001"},
+                  "status":"open",
+                  "statusTimestamp":1775042921180
+                }
+              ]
+            }
+            """;
+
+        await using var venue = new HyperliquidVenueAdapter("mainnet", new AccountCredentials(), new AppLogger());
+        var method = typeof(HyperliquidVenueAdapter).GetMethod("ParseAccountStateMessage", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        method!.Invoke(venue, [snapshotMessage]);
+        method.Invoke(venue, [updateMessage]);
+
+        var orders = Assert.IsAssignableFrom<IReadOnlyList<VenueOpenOrder>>(GetPrivateField(venue, "_openOrdersCache"));
+        Assert.Single(orders);
+        Assert.Equal("BTC", orders[0].Symbol);
+        Assert.Equal("999", orders[0].OrderId);
+    }
+
+    [Fact]
+    public void TryBuildOptimisticOpenOrder_ShouldCreateRowForRestingLimitOrder()
+    {
+        const string response = """
+            {
+              "status":"ok",
+              "response":{"type":"order","data":{"statuses":[{"resting":{"oid":12345}}]}}
+            }
+            """;
+
+        var method = typeof(HyperliquidVenueAdapter).GetMethod("TryBuildOptimisticOpenOrder", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var args = new object?[] { "BTC", 0.001m, 65000m, "12345", response, false, null };
+        var success = Assert.IsType<bool>(method!.Invoke(null, args));
+
+        Assert.True(success);
+        var order = Assert.IsType<VenueOpenOrder>(args[6]);
+        Assert.Equal("BTC", order.Symbol);
+        Assert.Equal("12345", order.OrderId);
+        Assert.Equal(65m, order.NotionalUsd);
+    }
+
     private static void SetPrivateField(object target, string fieldName, object value)
     {
         var field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
