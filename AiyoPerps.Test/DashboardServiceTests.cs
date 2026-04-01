@@ -208,6 +208,28 @@ public sealed class DashboardServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_HyperliquidGenericSymbol_PrefersDefaultDexRawSymbol()
+    {
+        var venue = new CountingSnapshotVenue();
+        var fixture = await TestFixture.CreateAsync(new CountingVenueFactory(venue));
+        await using var _ = fixture;
+
+        var account = fixture.AddAccount("Hyperliquid", "mainnet", "HYPE");
+        fixture.Symbols.MarkActivated("Hyperliquid", "mainnet", "HYNA:HYPE");
+
+        await fixture.Dashboard.UpdateConfigurationAsync(new DashboardConfiguration(
+            [account.AccountId],
+            "PERP:HYPE",
+            "5m",
+            false));
+
+        var snapshot = await fixture.Dashboard.StartAsync();
+
+        var market = Assert.Single(snapshot.Markets);
+        Assert.Equal("HYPE", market.RawSymbol);
+    }
+
+    [Fact]
     public async Task RefreshAsync_UsesSingleCombinedSnapshotRequestAndCachesBalances()
     {
         var venue = new CountingSnapshotVenue();

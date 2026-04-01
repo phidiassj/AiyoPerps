@@ -630,10 +630,42 @@ public sealed class DashboardService : IAsyncDisposable
                 string.Equals(x.CanonicalKey, normalized, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(x.RawSymbol, normalized, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(x.DisplaySymbol, normalized, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(x => ResolveQuotePreference(x))
+            .OrderBy(x => ResolveSymbolMatchRank(x, normalized))
+            .ThenBy(x => x.RawSymbol.Contains(':') ? 1 : 0)
+            .ThenBy(x => ResolveQuotePreference(x))
             .ThenBy(x => x.DisplaySymbol, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.RawSymbol, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
+    }
+
+    private static int ResolveSymbolMatchRank(SymbolCatalogEntry entry, string normalized)
+    {
+        if (string.Equals(entry.RawSymbol, normalized, StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        if (string.Equals(BuildDashboardSymbolKey(entry), normalized, StringComparison.OrdinalIgnoreCase))
+        {
+            return 1;
+        }
+
+        if (string.Equals(BuildDashboardDisplaySymbol(entry), normalized, StringComparison.OrdinalIgnoreCase))
+        {
+            return 2;
+        }
+
+        if (string.Equals(entry.DisplaySymbol, normalized, StringComparison.OrdinalIgnoreCase))
+        {
+            return 3;
+        }
+
+        if (string.Equals(entry.CanonicalKey, normalized, StringComparison.OrdinalIgnoreCase))
+        {
+            return 4;
+        }
+
+        return 5;
     }
 
     private decimal ResolveOrderReferencePrice(Guid accountId, string selectedSymbol, string orderSymbol, decimal? limitPrice)
