@@ -872,16 +872,6 @@ public sealed partial class WorkspaceTabViewModel
             }
             else
             {
-                if ((ack.Message ?? string.Empty).Contains("invalid", StringComparison.OrdinalIgnoreCase))
-                {
-                    SuppressCanceledOrderId(row.VenueOrderId);
-                    _remotePendingOrders = _remotePendingOrders
-                        .Where(x => !string.Equals(x.VenueOrderId, row.VenueOrderId, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-                    RebuildPendingOrderRows();
-                    _ = RefreshAccountStateOnceAsync();
-                }
-
                 _toastService.ShowError($"{L["Toast_CancelFailed"]}{ack.Message ?? "unknown"}");
             }
 
@@ -936,16 +926,6 @@ public sealed partial class WorkspaceTabViewModel
         }
         catch (Exception ex)
         {
-            if ((ex.Message ?? string.Empty).Contains("invalid", StringComparison.OrdinalIgnoreCase))
-            {
-                SuppressCanceledOrderId(row.VenueOrderId);
-                _remotePendingOrders = _remotePendingOrders
-                    .Where(x => !string.Equals(x.VenueOrderId, row.VenueOrderId, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-                RebuildPendingOrderRows();
-                _ = RefreshAccountStateOnceAsync();
-            }
-
             _toastService.ShowError($"{L["Toast_CancelFailed"]}{ex.Message}");
             _logger.Error("WorkspaceTab", $"CancelPending(API shared) exception tabId={TabId}, symbol={row.Symbol}, orderId={row.VenueOrderId}", ex);
         }

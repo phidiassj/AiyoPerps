@@ -701,7 +701,19 @@ public sealed class DashboardTabViewModel : ViewModelBase, IMainTabViewModel, ID
 
     private async Task CancelPendingOrderAsync(DashboardPendingOrderRow row)
     {
+        if (!PendingOrderRows.Contains(row))
+        {
+            _toastService.ShowWarning(L["Toast_OrderNoCancelableId"]);
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(row.OrderId))
+        {
+            _toastService.ShowWarning(L["Toast_OrderNoCancelableId"]);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(row.RawSymbol))
         {
             _toastService.ShowWarning(L["Toast_OrderNoCancelableId"]);
             return;
