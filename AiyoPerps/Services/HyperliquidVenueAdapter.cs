@@ -37,6 +37,11 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
     private static readonly TimeSpan AccountDiagnosticSampleInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan AccountMidsCacheTtl = TimeSpan.FromMilliseconds(1500);
     private static readonly TimeSpan AccountBalancesCacheTtl = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan[] CancelRetryDelays =
+    [
+        TimeSpan.FromMilliseconds(250),
+        TimeSpan.FromMilliseconds(600)
+    ];
     private const long SlowAccountFetchMs = 250;
     private const long SlowAccountSectionMs = 200;
 
@@ -270,7 +275,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
             };
 
             _logger.Info("Hyperliquid", $"CancelOrder submit coin={coin}, orderId={orderId}");
-            using var resp = await _httpClient.SendAsync(req, cancellationToken);
+            using var resp = await SendCancelRequestWithRetryAsync(req, cancellationToken);
             var body = await resp.Content.ReadAsStringAsync(cancellationToken);
             if (!resp.IsSuccessStatusCode)
             {
@@ -1238,7 +1243,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                 var value = ParseDecimal(prop.Value);
                 if (value > 0)
                 {
-                    result[NormalizeCoin(prop.Name)] = value;
+                    result[QualifyCoinForDex(prop.Name, dex)] = value;
                 }
             }
         }
@@ -2006,7 +2011,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                         continue;
                     }
 
-                    var coin = NormalizeCoin(name);
+                    var coin = QualifyCoinForDex(name, dex);
                     var assetId = string.IsNullOrWhiteSpace(dex)
                         ? metaIndex
                         : 100000 + (dexIndex * 10000) + metaIndex;
@@ -2108,6 +2113,50 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
             _logger.Warn("Hyperliquid", $"CancelOrder verification fallback for orderId={orderId}, symbol={coin}: {ex.Message}");
             return true;
         }
+    }
+
+    private async Task<HttpResponseMessage> SendCancelRequestWithRetryAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            using var clonedRequest = await CloneRequestAsync(request, cancellationToken);
+            var response = await _httpClient.SendAsync(clonedRequest, cancellationToken);
+            if ((int)response.StatusCode != 429 || attempt >= CancelRetryDelays.Length)
+            {
+                return response;
+            }
+
+            response.Dispose();
+            var delay = CancelRetryDelays[attempt];
+            _logger.Warn("Hyperliquid", $"CancelOrder hit rate limit. retry={attempt + 1}, delayMs={delay.TotalMilliseconds}");
+            await Task.Delay(delay, cancellationToken);
+        }
+    }
+
+    private static async Task<HttpRequestMessage> CloneRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var clone = new HttpRequestMessage(request.Method, request.RequestUri);
+        foreach (var header in request.Headers)
+        {
+            clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+
+        if (request.Content is not null)
+        {
+            var body = await request.Content.ReadAsStringAsync(cancellationToken);
+            clone.Content = new StringContent(body, Encoding.UTF8, request.Content.Headers.ContentType?.MediaType ?? "application/json");
+            foreach (var header in request.Content.Headers)
+            {
+                if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                clone.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+        }
+
+        return clone;
     }
 
     // Hyperliquid perp tick rules: <= 5 significant figures, and <= (6 - szDecimals) decimals for non-integer prices.
