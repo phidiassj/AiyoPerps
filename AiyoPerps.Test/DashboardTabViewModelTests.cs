@@ -1,6 +1,7 @@
 using AiyoPerps.Services;
 using AiyoPerps.ViewModels;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -312,6 +313,7 @@ public sealed class DashboardTabViewModelTests
         SetBackingField(viewModel, "<PendingOrderRows>k__BackingField", new ObservableCollection<DashboardPendingOrderRow>());
         SetField(viewModel, "_marginModeOptions", new[] { "Cross", "Isolated" });
         SetField(viewModel, "_selectedMarginMode", "Cross");
+        SetField(viewModel, "_suppressedCanceledOrderIds", new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase));
         return viewModel;
     }
 

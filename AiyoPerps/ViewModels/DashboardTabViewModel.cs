@@ -1047,7 +1047,7 @@ public sealed class DashboardTabViewModel : ViewModelBase, IMainTabViewModel, ID
             return false;
         }
 
-        return _suppressedCanceledOrderIds.ContainsKey(orderId);
+        return _suppressedCanceledOrderIds is not null && _suppressedCanceledOrderIds.ContainsKey(orderId);
     }
 
     private void SuppressCanceledOrderId(string? orderId)
@@ -1057,11 +1057,21 @@ public sealed class DashboardTabViewModel : ViewModelBase, IMainTabViewModel, ID
             return;
         }
 
+        if (_suppressedCanceledOrderIds is null)
+        {
+            return;
+        }
+
         _suppressedCanceledOrderIds[orderId] = DateTimeOffset.UtcNow;
     }
 
     private void CleanupSuppressedCanceledOrderIds()
     {
+        if (_suppressedCanceledOrderIds is null)
+        {
+            return;
+        }
+
         var cutoff = DateTimeOffset.UtcNow.AddSeconds(-30);
         var expired = _suppressedCanceledOrderIds
             .Where(x => x.Value < cutoff)
