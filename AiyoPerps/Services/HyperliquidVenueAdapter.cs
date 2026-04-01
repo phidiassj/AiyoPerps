@@ -904,9 +904,9 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                         continue;
                     }
 
-                    var symbol = NormalizeCoin(coin);
+                    var normalizedCoin = NormalizeCoin(coin);
                     var entryPx = ReadFirstDecimal(p, "entryPx", "entryPrice", "avgEntryPrice");
-                    var markPx = mids.TryGetValue(symbol, out var mid) ? mid : ReadFirstDecimal(p, "markPx", "markPrice");
+                    var markPx = mids.TryGetValue(normalizedCoin, out var mid) ? mid : ReadFirstDecimal(p, "markPx", "markPrice");
                     if (markPx <= 0)
                     {
                         markPx = entryPx;
@@ -954,7 +954,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                     var realizedPnlUsd = ReadFirstDecimal(p, "cumRealizedPnl", "realizedPnl");
 
                     result.Add(new VenuePosition(
-                        symbol,
+                        coin,
                         quantity,
                         notional,
                         leverage,
@@ -1084,7 +1084,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                 }
 
                 result.Add(new VenueOpenOrder(
-                    NormalizeCoin(coin),
+                    coin,
                     notional,
                     0m,
                     limitPx > 0 ? limitPx : null,
