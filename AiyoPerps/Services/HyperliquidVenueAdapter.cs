@@ -283,8 +283,14 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
             {
                 if (IsIdempotentCancelRejection(result.Message))
                 {
-                    _logger.Info("Hyperliquid", $"CancelOrder treated as already closed orderId={orderId}, reason={result.Message}, body={Trim(body)}");
-                    return new OrderAck(DateTimeOffset.UtcNow, orderId, true, result.Message);
+                    var orderStillOpen = await IsOrderStillOpenAsync(coin, orderId, cancellationToken);
+                    if (!orderStillOpen)
+                    {
+                        _logger.Info("Hyperliquid", $"CancelOrder treated as already closed orderId={orderId}, reason={result.Message}, body={Trim(body)}");
+                        return new OrderAck(DateTimeOffset.UtcNow, orderId, true, result.Message);
+                    }
+
+                    _logger.Warn("Hyperliquid", $"CancelOrder rejection kept as failure because order is still open symbol={coin}, orderId={orderId}, reason={result.Message}");
                 }
 
                 _logger.Warn("Hyperliquid", $"CancelOrder rejected orderId={orderId}, reason={result.Message}, body={Trim(body)}");
@@ -1043,6 +1049,8 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                 {
                     continue;
                 }
+
+                coin = QualifyCoinForDex(coin, dex);
 
                 var size = Math.Abs(ReadDecimal(item, "sz"));
                 if (size <= 0)
@@ -2080,6 +2088,28 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         return 0;
     }
 
+    private async Task<bool> IsOrderStillOpenAsync(string coin, string orderId, CancellationToken cancellationToken)
+    {
+        var infoAddress = ResolveInfoAddress();
+        if (string.IsNullOrWhiteSpace(infoAddress) || string.IsNullOrWhiteSpace(orderId))
+        {
+            return false;
+        }
+
+        try
+        {
+            var openOrders = await FetchOpenOrdersAsync(infoAddress, cancellationToken);
+            return openOrders.Any(x =>
+                string.Equals(x.OrderId, orderId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(NormalizeCoin(x.Symbol), NormalizeCoin(coin), StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn("Hyperliquid", $"CancelOrder verification fallback for orderId={orderId}, symbol={coin}: {ex.Message}");
+            return true;
+        }
+    }
+
     // Hyperliquid perp tick rules: <= 5 significant figures, and <= (6 - szDecimals) decimals for non-integer prices.
     private static decimal NormalizePerpPrice(decimal price, int sizeDecimals)
     {
@@ -2467,6 +2497,20 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                normalized.Contains("already cancelled, or filled", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("never placed, already canceled, or filled", StringComparison.OrdinalIgnoreCase) ||
                normalized.Contains("never placed, already cancelled, or filled", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string QualifyCoinForDex(string coin, string? dex)
+    {
+        var normalized = NormalizeCoin(coin);
+        if (string.IsNullOrWhiteSpace(dex) || normalized.Contains(':', StringComparison.Ordinal))
+        {
+            return normalized;
+        }
+
+        var dexPrefix = dex.Trim().ToLowerInvariant();
+        return string.IsNullOrWhiteSpace(dexPrefix)
+            ? normalized
+            : $"{dexPrefix}:{normalized}";
     }
 
     private static string ReadJsonText(JsonElement element, string fallback)
