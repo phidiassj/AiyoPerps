@@ -216,6 +216,54 @@ public sealed class AIAgentExecutionServiceTests
     }
 
     [Fact]
+    public async Task RunProcessAsync_CancellationReason_IsRecordedInStderr()
+    {
+        using var scope = TestScope.Create();
+        var settings = new AIAgentSettings(
+            true,
+            "custom",
+            5,
+            "Start-Sleep -Seconds 30; Write-Output 'done'",
+            "Prompt",
+            AppContext.BaseDirectory,
+            string.Empty,
+            30);
+
+        await using var service = new AIAgentExecutionService(scope.Preferences, scope.RunRepository, scope.HttpApiState, trading: null, scope.Logger);
+        var run = new AIAgentRunRecord(
+            "cancel-reason-run",
+            DateTimeOffset.UtcNow,
+            null,
+            "custom",
+            AIAgentExecutionService.StatusRunning,
+            null,
+            AppContext.BaseDirectory,
+            settings.CommandTemplate,
+            settings.PromptTemplate,
+            string.Empty,
+            string.Empty);
+        using var cts = new CancellationTokenSource();
+        var promptFile = Path.Combine(Path.GetTempPath(), $"cancel-reason-{Guid.NewGuid():N}.txt");
+        File.WriteAllText(promptFile, "Prompt");
+
+        var processTask = InvokeRunProcessAsync(
+            service,
+            run,
+            settings,
+            "scheduled",
+            promptFile,
+            cts.Token,
+            () => "settings updated");
+
+        await Task.Delay(150);
+        cts.Cancel();
+        var result = await processTask;
+
+        Assert.Equal(AIAgentExecutionService.StatusCanceled, result.Status);
+        Assert.Contains("settings updated", result.Stderr, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task DeleteRun_RemovesSelectedRecordAndUpdatesLastRun()
     {
         using var scope = TestScope.Create();
@@ -482,7 +530,23 @@ public sealed class AIAgentExecutionServiceTests
     {
         var method = typeof(AIAgentExecutionService).GetMethod("ExecuteAsync", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(method);
-        var task = method!.Invoke(service, [settings, trigger, CancellationToken.None]) as Task<AIAgentRunRecord>;
+        var task = method!.Invoke(service, [settings, trigger, CancellationToken.None, null]) as Task<AIAgentRunRecord>;
+        Assert.NotNull(task);
+        return task!;
+    }
+
+    private static Task<AIAgentRunRecord> InvokeRunProcessAsync(
+        AIAgentExecutionService service,
+        AIAgentRunRecord run,
+        AIAgentSettings settings,
+        string trigger,
+        string promptFile,
+        CancellationToken cancellationToken,
+        Func<string?> cancellationReasonProvider)
+    {
+        var method = typeof(AIAgentExecutionService).GetMethod("RunProcessAsync", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        var task = method!.Invoke(service, [run, settings, trigger, promptFile, cancellationToken, cancellationReasonProvider]) as Task<AIAgentRunRecord>;
         Assert.NotNull(task);
         return task!;
     }

@@ -34,6 +34,7 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
 
     private CancellationTokenSource? _schedulerCts;
     private Task? _schedulerTask;
+    private SchedulerCancellationState? _schedulerState;
     private bool _started;
     private bool _disposed;
     private bool _pendingConditionRun;
@@ -41,6 +42,18 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
     private AIAgentSettings _settings;
     private AIAgentRunRecord? _currentRun;
     private AIAgentRunRecord? _lastRun;
+
+    private sealed class SchedulerCancellationState
+    {
+        public SchedulerCancellationState(CancellationTokenSource cts)
+        {
+            Cts = cts;
+        }
+
+        public CancellationTokenSource Cts { get; }
+
+        public string? CancelReason { get; set; }
+    }
 
     public AIAgentExecutionService(
         UserPreferenceRepository preferences,
@@ -158,15 +171,15 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
         Task? schedulerTask;
         lock (_sync)
         {
-            schedulerCts = _schedulerCts;
+            schedulerCts = CancelSchedulerUnsafe("service disposal");
             schedulerTask = _schedulerTask;
             _schedulerCts = null;
             _schedulerTask = null;
+            _schedulerState = null;
         }
 
         if (schedulerCts is not null)
         {
-            schedulerCts.Cancel();
             schedulerCts.Dispose();
         }
 
@@ -189,10 +202,10 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
 
     private void RestartSchedulerUnsafe()
     {
-        _schedulerCts?.Cancel();
-        _schedulerCts?.Dispose();
+        CancelSchedulerUnsafe("settings updated");
         _schedulerTask = null;
         _schedulerCts = null;
+        _schedulerState = null;
 
         if (!_settings.IsEnabled || !CanRun(_settings) || !HasAutoWakeSource(_settings))
         {
@@ -200,12 +213,34 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
         }
 
         var cts = new CancellationTokenSource();
+        var schedulerState = new SchedulerCancellationState(cts);
         _schedulerCts = cts;
-        _schedulerTask = Task.Run(() => SchedulerLoopAsync(cts.Token), cts.Token);
+        _schedulerState = schedulerState;
+        _schedulerTask = Task.Run(() => SchedulerLoopAsync(schedulerState), cts.Token);
     }
 
-    private async Task SchedulerLoopAsync(CancellationToken cancellationToken)
+    private CancellationTokenSource? CancelSchedulerUnsafe(string reason)
     {
+        var schedulerCts = _schedulerCts;
+        var schedulerState = _schedulerState;
+
+        if (schedulerCts is not null)
+        {
+            _logger.Info("AIAgent", $"Scheduler cancellation requested reason={reason}");
+            if (schedulerState is not null)
+            {
+                schedulerState.CancelReason = reason;
+            }
+
+            schedulerCts.Cancel();
+        }
+
+        return schedulerCts;
+    }
+
+    private async Task SchedulerLoopAsync(SchedulerCancellationState schedulerState)
+    {
+        var cancellationToken = schedulerState.Cts.Token;
         var lastConditionStates = EmptyConditionState;
         var nextIntervalDueAt = GetNextIntervalDueAt(_settings, DateTimeOffset.UtcNow);
         var wasRunning = IsRunning;
@@ -272,7 +307,7 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
                 {
                     try
                     {
-                        await ExecuteAsync(settings, "condition", cancellationToken);
+                        await ExecuteAsync(settings, "condition", cancellationToken, () => schedulerState.CancelReason);
                         nextIntervalDueAt = GetNextIntervalDueAt(_settings, DateTimeOffset.UtcNow);
                         wasRunning = IsRunning;
                     }
@@ -295,7 +330,7 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
 
                 try
                 {
-                    await ExecuteAsync(settings, "scheduled", cancellationToken);
+                    await ExecuteAsync(settings, "scheduled", cancellationToken, () => schedulerState.CancelReason);
                     nextIntervalDueAt = GetNextIntervalDueAt(_settings, DateTimeOffset.UtcNow);
                     wasRunning = IsRunning;
                 }
@@ -377,7 +412,11 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
     private static bool AnyConditionMet(IReadOnlyDictionary<string, bool> states)
         => states.Values.Any(x => x);
 
-    private async Task<AIAgentRunRecord> ExecuteAsync(AIAgentSettings settings, string trigger, CancellationToken cancellationToken)
+    private async Task<AIAgentRunRecord> ExecuteAsync(
+        AIAgentSettings settings,
+        string trigger,
+        CancellationToken cancellationToken,
+        Func<string?>? cancellationReasonProvider = null)
     {
         var normalizedSettings = NormalizeSettings(settings);
         ValidateSettings(normalizedSettings);
@@ -413,7 +452,7 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
             _runRepository.Upsert(runningRecord);
             RaiseStateChanged();
 
-            var completedRecord = await RunProcessAsync(runningRecord, normalizedSettings, trigger, promptFile, cancellationToken);
+            var completedRecord = await RunProcessAsync(runningRecord, normalizedSettings, trigger, promptFile, cancellationToken, cancellationReasonProvider);
             _lastRun = completedRecord;
             _currentRun = null;
             _runRepository.Upsert(completedRecord);
@@ -460,7 +499,8 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
         AIAgentSettings settings,
         string trigger,
         string promptFile,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<string?>? cancellationReasonProvider)
     {
         Process? process = null;
         string stdout = string.Empty;
@@ -513,12 +553,18 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
                 status = StatusTimeout;
                 stderr = await ReadAndKillProcessAsync(process, stderrTask, "The AI agent process timed out.");
                 stdout = await SafeReadAsync(stdoutTask);
+                _logger.Warn("AIAgent", $"Run timed out runId={runningRecord.RunId}, trigger={trigger}, timeoutSeconds={settings.TimeoutSeconds}");
             }
             catch (OperationCanceledException)
             {
                 status = StatusCanceled;
-                stderr = await ReadAndKillProcessAsync(process, stderrTask, "The AI agent process was canceled.");
+                var cancellationReason = ResolveCancellationReason(cancellationReasonProvider);
+                var fallbackMessage = string.IsNullOrWhiteSpace(cancellationReason)
+                    ? "The AI agent process was canceled."
+                    : $"The AI agent process was canceled. Reason: {cancellationReason}.";
+                stderr = await ReadAndKillProcessAsync(process, stderrTask, fallbackMessage);
                 stdout = await SafeReadAsync(stdoutTask);
+                _logger.Warn("AIAgent", $"Run canceled runId={runningRecord.RunId}, trigger={trigger}, reason={cancellationReason ?? "caller cancellation"}");
             }
         }
         catch (Exception ex)
@@ -729,6 +775,17 @@ public sealed class AIAgentExecutionService : IAsyncDisposable
         {
             return string.Empty;
         }
+    }
+
+    private static string? ResolveCancellationReason(Func<string?>? cancellationReasonProvider)
+    {
+        var reason = cancellationReasonProvider?.Invoke();
+        if (!string.IsNullOrWhiteSpace(reason))
+        {
+            return reason.Trim();
+        }
+
+        return null;
     }
 
     private static void ApplyEnvironmentVariables(ProcessStartInfo startInfo, string raw, string workingDirectory)
