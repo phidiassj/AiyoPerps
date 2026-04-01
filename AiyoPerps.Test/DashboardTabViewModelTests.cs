@@ -154,6 +154,30 @@ public sealed class DashboardTabViewModelTests
     }
 
     [Fact]
+    public void ReplacePendingOrders_SkipsRecentlySuppressedCanceledOrders()
+    {
+        var viewModel = CreateSubject();
+        InvokePrivate(viewModel, "SuppressCanceledOrderId", "order-1");
+
+        InvokePrivate(viewModel, "ReplacePendingOrders",
+        new[]
+        {
+            new DashboardPendingOrderDto(
+                Guid.NewGuid(),
+                "FakeVm",
+                "BTC",
+                "BTCUSDT",
+                "Cross",
+                500m,
+                69000m,
+                68100m,
+                "order-1")
+        });
+
+        Assert.Empty(viewModel.PendingOrderRows);
+    }
+
+    [Fact]
     public void RefreshMarginModeSupport_UsesCurrentSymbolPositionMode()
     {
         var viewModel = CreateSubject();

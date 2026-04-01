@@ -56,6 +56,7 @@ public sealed class DashboardTabViewModel : ViewModelBase, IMainTabViewModel, ID
     private AIAgentRunDetailViewModel? _selectedAIAgentRunDetail;
     private bool _isOptionsExpanded = true;
     private bool _isAccountsExpanded;
+    private readonly Dictionary<string, DateTimeOffset> _suppressedCanceledOrderIds = new(StringComparer.OrdinalIgnoreCase);
 
     public DashboardTabViewModel(
         ObservableCollection<AccountProfile> accounts,
@@ -722,6 +723,8 @@ public sealed class DashboardTabViewModel : ViewModelBase, IMainTabViewModel, ID
         try
         {
             await _dashboardService.CancelOrderAsync(new ApiCancelOrderRequest(row.AccountId, row.RawSymbol, row.OrderId));
+            SuppressCanceledOrderId(row.OrderId);
+            PendingOrderRows.Remove(row);
             _toastService.ShowInfo(L["Toast_CancelSuccess"]);
         }
         catch (Exception ex)
@@ -857,6 +860,7 @@ public sealed class DashboardTabViewModel : ViewModelBase, IMainTabViewModel, ID
         _isApplyingSnapshot = true;
         try
         {
+            CleanupSuppressedCanceledOrderIds();
             if (ShowTestnet != snapshot.Configuration.ShowTestnet)
             {
                 ShowTestnet = snapshot.Configuration.ShowTestnet;
@@ -1000,6 +1004,7 @@ public sealed class DashboardTabViewModel : ViewModelBase, IMainTabViewModel, ID
     private void ReplacePendingOrders(IReadOnlyList<DashboardPendingOrderDto> orders)
     {
         var orderedOrders = orders
+            .Where(x => !IsSuppressedCanceledOrderId(x.OrderId))
             .OrderBy(x => x.Exchange, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.OrderId, StringComparer.OrdinalIgnoreCase)
@@ -1033,6 +1038,40 @@ public sealed class DashboardTabViewModel : ViewModelBase, IMainTabViewModel, ID
         }
 
         SynchronizeRows(PendingOrderRows, desiredRows);
+    }
+
+    private bool IsSuppressedCanceledOrderId(string? orderId)
+    {
+        if (string.IsNullOrWhiteSpace(orderId))
+        {
+            return false;
+        }
+
+        return _suppressedCanceledOrderIds.ContainsKey(orderId);
+    }
+
+    private void SuppressCanceledOrderId(string? orderId)
+    {
+        if (string.IsNullOrWhiteSpace(orderId))
+        {
+            return;
+        }
+
+        _suppressedCanceledOrderIds[orderId] = DateTimeOffset.UtcNow;
+    }
+
+    private void CleanupSuppressedCanceledOrderIds()
+    {
+        var cutoff = DateTimeOffset.UtcNow.AddSeconds(-30);
+        var expired = _suppressedCanceledOrderIds
+            .Where(x => x.Value < cutoff)
+            .Select(x => x.Key)
+            .ToList();
+
+        foreach (var id in expired)
+        {
+            _suppressedCanceledOrderIds.Remove(id);
+        }
     }
 
     private string CurrentMarginModeVenueId => SelectedMarketRow?.Exchange ?? string.Empty;
