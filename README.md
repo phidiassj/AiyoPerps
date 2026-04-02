@@ -26,7 +26,7 @@ Even if you donâ€™t live in Taiwan, if your invoice wins, just let us know. Weâ€
 
 ![Conditional wake up](./images/agentwakeup_en.jpg)
 
-## 0. Latest update
+## 0. Supported Exchanges
 - CEX: [BitMEX](https://www.bitmex.com/)
 - DEX: [Hyperliquid](https://app.hyperliquid.xyz/), [Aster](https://www.asterdex.com/), [Grvt](https://grvt.io/), [dYdX](https://dydx.trade/)
 
