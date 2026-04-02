@@ -2,6 +2,7 @@ using AiyoPerps.Services;
 using AiyoPerps.Models;
 using AiyoPerps.Core;
 using System.Collections.Generic;
+using System.Net.WebSockets;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
@@ -195,6 +196,43 @@ public sealed class HyperliquidVenueAdapterTests
         Assert.Equal("BTC", order.Symbol);
         Assert.Equal("12345", order.OrderId);
         Assert.Equal(65m, order.NotionalUsd);
+    }
+
+    [Fact]
+    public async Task ShouldReconnectMarketSocket_ShouldReturnTrueForCurrentSocket()
+    {
+        await using var venue = new HyperliquidVenueAdapter("mainnet", new AccountCredentials(), new AppLogger());
+        using var socket = new ClientWebSocket();
+        SetPrivateField(venue, "_ws", socket);
+
+        var method = typeof(HyperliquidVenueAdapter).GetMethod("ShouldReconnectMarketSocket", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var actual = method!.Invoke(venue, [socket, CancellationToken.None]);
+
+        Assert.IsType<bool>(actual);
+        Assert.True((bool)actual!);
+    }
+
+    [Fact]
+    public async Task ShouldReconnectMarketSocket_ShouldReturnFalseForStaleSocketOrCanceledToken()
+    {
+        await using var venue = new HyperliquidVenueAdapter("mainnet", new AccountCredentials(), new AppLogger());
+        using var currentSocket = new ClientWebSocket();
+        using var staleSocket = new ClientWebSocket();
+        SetPrivateField(venue, "_ws", currentSocket);
+
+        var method = typeof(HyperliquidVenueAdapter).GetMethod("ShouldReconnectMarketSocket", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var staleResult = method!.Invoke(venue, [staleSocket, CancellationToken.None]);
+        var canceledResult = method.Invoke(venue, [currentSocket, cts.Token]);
+
+        Assert.False((bool)staleResult!);
+        Assert.False((bool)canceledResult!);
     }
 
     private static void SetPrivateField(object target, string fieldName, object value)

@@ -32,6 +32,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
     private readonly SemaphoreSlim _metaGate = new(1, 1);
     private readonly SemaphoreSlim _allMidsCacheGate = new(1, 1);
     private readonly SemaphoreSlim _balancesCacheGate = new(1, 1);
+    private readonly SemaphoreSlim _marketWsGate = new(1, 1);
     private readonly SemaphoreSlim _accountWsGate = new(1, 1);
     private readonly object _accountStateSync = new();
     private readonly Sha3Keccack _keccak = Sha3Keccack.Current;
@@ -40,6 +41,12 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
     private static readonly TimeSpan AccountMidsCacheTtl = TimeSpan.FromMilliseconds(1500);
     private static readonly TimeSpan AccountBalancesCacheTtl = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan AccountWsStateTtl = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan[] MarketReconnectDelays =
+    [
+        TimeSpan.FromSeconds(1),
+        TimeSpan.FromSeconds(3),
+        TimeSpan.FromSeconds(5)
+    ];
     private static readonly TimeSpan[] CancelRetryDelays =
     [
         TimeSpan.FromMilliseconds(250),
@@ -92,63 +99,68 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         await DisconnectMarketDataAsync(cancellationToken);
 
         _coin = NormalizeCoin(subscriptions.FirstOrDefault() ?? "BTC");
-        _logger.Info("Hyperliquid", $"ConnectMarketData start coin={_coin}, ws={_wsBase}");
-
-        _ws = new ClientWebSocket();
-        _ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
-        _wsCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        await _ws.ConnectAsync(new Uri(_wsBase), _wsCts.Token);
-
-        await SendSubscribeAsync(_ws, new { type = "trades", coin = _coin }, _wsCts.Token);
-        await SendSubscribeAsync(_ws, new { type = "l2Book", coin = _coin }, _wsCts.Token);
-
-        _wsTask = Task.Run(() => ReceiveLoopAsync(_ws, _wsCts.Token), _wsCts.Token);
-        _logger.Info("Hyperliquid", $"ConnectMarketData done coin={_coin}");
+        await _marketWsGate.WaitAsync(cancellationToken);
+        try
+        {
+            _wsCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            await ConnectMarketSocketCoreAsync(_coin, _wsCts.Token);
+        }
+        finally
+        {
+            _marketWsGate.Release();
+        }
     }
 
     public async Task DisconnectMarketDataAsync(CancellationToken cancellationToken = default)
     {
         _logger.Info("Hyperliquid", "DisconnectMarketDataAsync called");
-
-        if (_wsCts is not null)
+        await _marketWsGate.WaitAsync(cancellationToken);
+        try
         {
-            _wsCts.Cancel();
-        }
+            if (_wsCts is not null)
+            {
+                _wsCts.Cancel();
+            }
 
-        if (_ws is not null)
-        {
-            if (_ws.State == WebSocketState.Open || _ws.State == WebSocketState.CloseReceived)
+            if (_ws is not null)
+            {
+                if (_ws.State == WebSocketState.Open || _ws.State == WebSocketState.CloseReceived)
+                {
+                    try
+                    {
+                        await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "closing", cancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Warn("Hyperliquid", $"WS close warning: {ex.Message}");
+                    }
+                }
+
+                _ws.Dispose();
+                _ws = null;
+            }
+
+            if (_wsTask is not null)
             {
                 try
                 {
-                    await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "closing", cancellationToken);
+                    await _wsTask;
                 }
                 catch (Exception ex)
                 {
-                    _logger.Warn("Hyperliquid", $"WS close warning: {ex.Message}");
+                    _logger.Warn("Hyperliquid", $"WS task end warning: {ex.Message}");
                 }
+
+                _wsTask = null;
             }
 
-            _ws.Dispose();
-            _ws = null;
+            _wsCts?.Dispose();
+            _wsCts = null;
         }
-
-        if (_wsTask is not null)
+        finally
         {
-            try
-            {
-                await _wsTask;
-            }
-            catch (Exception ex)
-            {
-                _logger.Warn("Hyperliquid", $"WS task end warning: {ex.Message}");
-            }
-
-            _wsTask = null;
+            _marketWsGate.Release();
         }
-
-        _wsCts?.Dispose();
-        _wsCts = null;
     }
 
     public async Task<(bool IsSuccess, string Message)> ConfigureLeverageAsync(string symbol, decimal leverage, MarginMode marginMode, CancellationToken cancellationToken = default)
@@ -1739,10 +1751,92 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         await DisconnectMarketDataAsync(CancellationToken.None);
         await DisconnectAccountStateWebSocketAsync(CancellationToken.None);
         _httpClient.Dispose();
+        _marketWsGate.Dispose();
         _accountWsGate.Dispose();
         _balancesCacheGate.Dispose();
         _allMidsCacheGate.Dispose();
         _metaGate.Dispose();
+    }
+
+    private async Task ConnectMarketSocketCoreAsync(string coin, CancellationToken cancellationToken)
+    {
+        _logger.Info("Hyperliquid", $"ConnectMarketData start coin={coin}, ws={_wsBase}");
+
+        var ws = new ClientWebSocket();
+        ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+        await ws.ConnectAsync(new Uri(_wsBase), cancellationToken);
+
+        await SendSubscribeAsync(ws, new { type = "trades", coin }, cancellationToken);
+        await SendSubscribeAsync(ws, new { type = "l2Book", coin }, cancellationToken);
+
+        _ws = ws;
+        _wsTask = Task.Run(() => ReceiveLoopAsync(ws, cancellationToken), cancellationToken);
+        _logger.Info("Hyperliquid", $"ConnectMarketData done coin={coin}");
+    }
+
+    private bool ShouldReconnectMarketSocket(ClientWebSocket failedSocket, CancellationToken cancellationToken)
+    {
+        return !cancellationToken.IsCancellationRequested && ReferenceEquals(_ws, failedSocket);
+    }
+
+    private async Task TryReconnectMarketDataAsync(ClientWebSocket failedSocket)
+    {
+        for (var attempt = 0; attempt < MarketReconnectDelays.Length; attempt++)
+        {
+            var cts = _wsCts;
+            if (cts is null || cts.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                await Task.Delay(MarketReconnectDelays[attempt], cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            await _marketWsGate.WaitAsync(CancellationToken.None);
+            try
+            {
+                cts = _wsCts;
+                if (cts is null || cts.IsCancellationRequested || !ReferenceEquals(_ws, failedSocket))
+                {
+                    return;
+                }
+
+                try
+                {
+                    failedSocket.Dispose();
+                }
+                catch
+                {
+                    // Ignore disposal races while replacing a dead socket.
+                }
+
+                _ws = null;
+                _wsTask = null;
+                await ConnectMarketSocketCoreAsync(_coin, cts.Token);
+                _logger.Info("Hyperliquid", $"Market WS reconnected coin={_coin}, attempt={attempt + 1}");
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn("Hyperliquid", $"Market WS reconnect attempt {attempt + 1} failed: {ex.Message}");
+            }
+            finally
+            {
+                _marketWsGate.Release();
+            }
+        }
+
+        _logger.Warn("Hyperliquid", $"Market WS reconnect exhausted coin={_coin}");
     }
 
     private static async Task SendSubscribeAsync(ClientWebSocket ws, object subscription, CancellationToken cancellationToken)
@@ -2298,6 +2392,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
     {
         var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
         var messageCount = 0;
+        var shouldReconnect = false;
 
         try
         {
@@ -2311,6 +2406,7 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
                         _logger.Warn("Hyperliquid", "WS received close frame");
+                        shouldReconnect = ShouldReconnectMarketSocket(ws, cancellationToken);
                         return;
                     }
 
@@ -2344,11 +2440,16 @@ public sealed class HyperliquidVenueAdapter : IPerpVenue, IHistoricalCandleProvi
         catch (Exception ex)
         {
             _logger.Error("Hyperliquid", "WS receive loop exception", ex);
+            shouldReconnect = ShouldReconnectMarketSocket(ws, cancellationToken);
         }
         finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
             _logger.Info("Hyperliquid", "WS receive loop exited");
+            if (shouldReconnect)
+            {
+                _ = Task.Run(() => TryReconnectMarketDataAsync(ws));
+            }
         }
     }
 
