@@ -481,22 +481,22 @@
     <value>取消例外：</value>
   </data>
   <data name="AccountManager_VenueCapability_Aster" xml:space="preserve">
-    <value />
+    <value>驗證方式：僅支援 Wallet。請提供 Account Address；Wallet Address 與 Private Key 用於簽名。</value>
   </data>
   <data name="AccountManager_SubAccountId" xml:space="preserve">
     <value />
   </data>
   <data name="AccountManager_VenueCapability_GRVT" xml:space="preserve">
-    <value />
+    <value>驗證方式：可使用 Wallet、API Key，或兩者同時提供。若平台設定需要子帳號，請一併填寫 Sub Account Id。</value>
   </data>
   <data name="AccountManager_VenueCapability_BitMEX" xml:space="preserve">
-    <value />
+    <value>驗證方式：僅支援 API Key。請填寫 API Key 與 API Secret。</value>
   </data>
   <data name="AccountManager_TestAvailableAfterSave" xml:space="preserve">
-    <value />
+    <value>建立帳號後，才可進行測試連線。</value>
   </data>
   <data name="AccountManager_VenueCapability_Hyperliquid" xml:space="preserve">
-    <value />
+    <value>驗證方式：僅支援 Wallet。Account Address 可留空，程式會優先使用 Wallet Address 作為帳號地址；Wallet Address 與 Private Key 用於簽名。</value>
   </data>
   <data name="AccountManager_VenueCapability_dYdX" xml:space="preserve">
     <value>驗證方式：僅支援 Wallet。Account Address 必須是以 dydx 開頭的 dYdX chain address，不是 0x 地址。若 Account Address 留空或誤填成 EVM 位址，程式會回退使用簽名用的 Wallet Address。Wallet Address 與 Private Key 用於簽名；Sub Account Id 可留空，預設為 0，且請填 parent subaccount number（0-127）。Cross 與 Isolated 皆可下單，但 Isolated 需要 owner wallet，不支援前端建立的 API Trading Key。</value>

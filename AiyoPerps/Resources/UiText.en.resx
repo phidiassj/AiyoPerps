@@ -481,22 +481,22 @@
     <value>Cancel exception: </value>
   </data>
   <data name="AccountManager_VenueCapability_Aster" xml:space="preserve">
-    <value />
+    <value>Auth mode: wallet only. Provide the Account Address; Wallet Address and Private Key are used for signing.</value>
   </data>
   <data name="AccountManager_SubAccountId" xml:space="preserve">
     <value />
   </data>
   <data name="AccountManager_VenueCapability_GRVT" xml:space="preserve">
-    <value />
+    <value>Auth mode: wallet, API key, or both. Fill in Sub Account Id as well if your GRVT setup requires a subaccount.</value>
   </data>
   <data name="AccountManager_VenueCapability_BitMEX" xml:space="preserve">
-    <value />
+    <value>Auth mode: API key only. Provide the API Key and API Secret.</value>
   </data>
   <data name="AccountManager_TestAvailableAfterSave" xml:space="preserve">
-    <value />
+    <value>Connection test is available after the account is saved.</value>
   </data>
   <data name="AccountManager_VenueCapability_Hyperliquid" xml:space="preserve">
-    <value />
+    <value>Auth mode: wallet only. Account Address can be left blank; the app will use Wallet Address as the account address when available. Wallet Address and Private Key are used for signing.</value>
   </data>
   <data name="AccountManager_VenueCapability_dYdX" xml:space="preserve">
     <value>Auth mode: wallet only. Account Address must be a dYdX chain address starting with dydx, not 0x. If Account Address is left blank or filled with an EVM address, the app falls back to the signing Wallet Address. Wallet Address and Private Key are used for signing. Sub Account Id is optional and defaults to 0, and it should be the parent subaccount number (0-127). Cross and Isolated orders are supported, but Isolated requires the owner wallet and does not work with front-end generated API Trading Keys.</value>

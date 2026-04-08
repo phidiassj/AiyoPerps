@@ -1,0 +1,39 @@
+{
+  "name": "@phidiassj/aiyoperps-linux64",
+  "version": "2026.4.4",
+  "description": "Linux x64 desktop distribution of AiyoPerps packaged for npm installation.",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "bin": {
+    "aiyoperps-linux64": "./bin/aiyoperps-linux64.js",
+    "aiyoperps-linux64-install-desktop": "./bin/install-desktop-entry.js"
+  },
+  "scripts": {
+    "postinstall": "node ./scripts/postinstall.js",
+    "start": "node ./bin/aiyoperps-linux64.js",
+    "desktop:install": "node ./bin/install-desktop-entry.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "app",
+    "bin",
+    "scripts",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "aiyoperps",
+    "desktop",
+    "linux",
+    "perpetual-futures",
+    "trading"
+  ]
+}

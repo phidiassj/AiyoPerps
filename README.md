@@ -3,6 +3,7 @@
 ### [**繁體中文**](./Readme_zh.md) | [**Official Website**](https://perps.aiyo.app)
 
 AiyoPerps is a perpetual futures desktop terminal that supports both CEX (centralized) and DEX (decentralized) trading. It provides a full desktop UI, an MCP server for AI agents, and a local REST API.<br>
+All your data is stored locally in SQLite, in the db folder under the program execution path. Your data will not leave the local machine, and you do not need to give any API key to the AI ​​Agent.<br>
 With AiyoPerps, you can trade crypto perpetual futures **manually**, **with AI collaboration**, or **fully driven by AI**.
 
 ![Software interface](./images/main-en-01.jpg)
@@ -33,15 +34,33 @@ Even if you don’t live in Taiwan, if your invoice wins, just let us know. We�
 ## 1. Requirements
 - Windows, Linux, or macOS (via Docker).
 - .NET 10 Runtime (included in release builds).
-- A perpetual futures exchange account. Current supported venues are `Hyperliquid`, `BitMEX`, and `Aster`.
+- A perpetual futures exchange account. Current supported venues are `Hyperliquid`, `BitMEX`, `dYdX`, `Grvt`, and `Aster`.
 
 ## 2. Run the Desktop App
 ### Use a release build
 1. Download the latest package from [GitHub Releases](https://github.com/phidiassj/AiyoPerps/releases/latest).
-2. Extract it.
-3. Run:
+2. Run:
    - Windows: `AiyoPerps.exe`
-   - Linux: `./AiyoPerps`
+   - Linux AppImage:
+     ```bash
+     chmod +x AiyoPerps-x86_64.AppImage
+     ./AiyoPerps-x86_64.AppImage
+     ```
+
+### Verify a Linux AppImage download
+
+```bash
+sha256sum -c AiyoPerps-x86_64.AppImage.sha256
+```
+
+### Build a Linux AppImage
+1. Publish the Linux self-contained build:
+   `dotnet publish ./AiyoPerps/AiyoPerps.csproj -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "./publish/linux-x64"`
+2. On Linux, run:
+   `./scripts/appimage/build-appimage.sh`
+3. Generate the checksum file:
+   `sha256sum ./artifacts/appimage/AiyoPerps-x86_64.AppImage > ./artifacts/appimage/AiyoPerps-x86_64.AppImage.sha256`
+4. The AppImage and checksum file will be created under `./artifacts/appimage/`
 
 ### Build and run from source
 1. Clone this repo or download the full source code.<br>

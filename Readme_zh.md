@@ -3,6 +3,7 @@
 ### [**English**](./README.md) | [**官方網站**](https://perps.aiyo.app)
 
 AiyoPerps 是一套同時支援 CEX (中心化) 與 DEX (去中心化) 的永續合約桌面交易終端，提供完整桌面 UI、給 AI Agent 使用的 MCP Server，以及本機 REST API。<br>
+你所有的資料都儲存在本地 SQLite，程式執行路徑下的 db 資料夾，你的資料不會離開本機，你也不需要將 API key 交給 AI Agent。<br>
 你可以基於 AiyoPerps 實現 **手動**、**與 AI 協作**，或 **完全由 AI 操作** 加密貨幣永續合約交易。
 
 ![Software interface](./images/main-zh-01.jpg)
@@ -33,15 +34,33 @@ AiyoPerps 是一套同時支援 CEX (中心化) 與 DEX (去中心化) 的永續
 ## 1. 環境需求
 - Windows、Linux、MacOS (透過 docker)。
 - .NET 10 Runtime (發佈版本已內建)。
-- 永續合約交易平台帳號，目前支援 `Hyperliquid`、`BitMEX`、`Aster`。
+- 永續合約交易平台帳號，目前支援 `Hyperliquid`, `BitMEX`, `dYdX`, `Grvt`, and `Aster`。
 
 ## 2. 執行桌面版
 ### 使用發佈版本
 1. 到 [GitHub Releases](https://github.com/phidiassj/AiyoPerps/releases/latest) 下載最新版本。
-2. 解壓縮。
-3. 執行：
+2. 執行：
    - Windows：`AiyoPerps.exe`
-   - Linux：`./AiyoPerps`
+   - Linux AppImage：
+     ```bash
+     chmod +x AiyoPerps-x86_64.AppImage
+     ./AiyoPerps-x86_64.AppImage
+     ```
+
+### 驗證 Linux AppImage 下載檔
+
+```bash
+sha256sum -c AiyoPerps-x86_64.AppImage.sha256
+```
+
+### 建立 Linux AppImage
+1. 發佈 Linux self-contained 版本：
+   `dotnet publish ./AiyoPerps/AiyoPerps.csproj -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "./publish/linux-x64"`
+2. 在 Linux 上執行：
+   `./scripts/appimage/build-appimage.sh`
+3. 產生 checksum 檔：
+   `sha256sum ./artifacts/appimage/AiyoPerps-x86_64.AppImage > ./artifacts/appimage/AiyoPerps-x86_64.AppImage.sha256`
+4. AppImage 與 checksum 檔都會輸出到 `./artifacts/appimage/`
 
 ### 從原始碼編譯執行
 1. Clone 此 repo 或下載完整原始碼。<br>

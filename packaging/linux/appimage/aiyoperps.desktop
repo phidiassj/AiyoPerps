@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AiyoPerps
+Comment=Perpetual futures desktop terminal
+Exec=AiyoPerps
+Icon=aiyoperps
+Terminal=false
+Categories=Office;Finance;
+StartupNotify=true
+StartupWMClass=AiyoPerps

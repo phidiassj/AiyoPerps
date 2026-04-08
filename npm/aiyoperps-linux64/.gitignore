@@ -1,0 +1,5 @@
+*.tgz
+app/
+node_modules/
+!bin/
+!bin/*.js

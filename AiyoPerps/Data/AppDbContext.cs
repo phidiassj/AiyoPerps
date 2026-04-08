@@ -1,12 +1,15 @@
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 
 namespace AiyoPerps.Data;
 
 public sealed class AppDbContext : DbContext
 {
-    public static string DbDirectory => Path.Combine(AppContext.BaseDirectory, "db");
+    private static readonly Lazy<string> ResolvedDbDirectory = new(ResolveDbDirectory);
+
+    public static string DbDirectory => ResolvedDbDirectory.Value;
     public static string MainDbPath => Path.Combine(DbDirectory, "AiyoPerps.main.db");
 
     public DbSet<AccountEntity> Accounts => Set<AccountEntity>();
@@ -21,6 +24,55 @@ public sealed class AppDbContext : DbContext
     {
         Directory.CreateDirectory(DbDirectory);
         optionsBuilder.UseSqlite($"Data Source={MainDbPath}");
+    }
+
+    private static string ResolveDbDirectory()
+    {
+        var installDbDirectory = Path.Combine(AppContext.BaseDirectory, "db");
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            return installDbDirectory;
+        }
+
+        return CanWriteToDirectory(installDbDirectory)
+            ? installDbDirectory
+            : Path.Combine(GetLinuxConfigRoot(), "AiyoPerps");
+    }
+
+    private static string GetLinuxConfigRoot()
+    {
+        var xdgConfigHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        if (!string.IsNullOrWhiteSpace(xdgConfigHome))
+        {
+            return xdgConfigHome.Trim();
+        }
+
+        var homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(homeDirectory))
+        {
+            return Path.Combine(homeDirectory, ".config");
+        }
+
+        return AppContext.BaseDirectory;
+    }
+
+    private static bool CanWriteToDirectory(string directoryPath)
+    {
+        try
+        {
+            Directory.CreateDirectory(directoryPath);
+            var probeFilePath = Path.Combine(directoryPath, $".write-test-{Environment.ProcessId}-{Guid.NewGuid():N}.tmp");
+            using (File.Create(probeFilePath))
+            {
+            }
+
+            File.Delete(probeFilePath);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

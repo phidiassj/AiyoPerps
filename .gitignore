@@ -12,6 +12,9 @@
 *.db
 AGENTS.md
 [Pp]ublish/
+npm\aiyoperps-linux64\app
+npm/aiyoperps-linux64/app/
+npm/aiyoperps-linux64/*.tgz
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
